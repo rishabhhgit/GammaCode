@@ -1,0 +1,35 @@
+{
+  "name": "gamma-code",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.4.1",
+  "pnpm": {
+    "onlyBuiltDependencies": ["electron", "node-pty"]
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "turbo dev",
+    "dev:web": "pnpm --filter @gamma-code/web dev",
+    "dev:server": "pnpm --filter @gamma-code/server dev",
+    "dev:desktop": "pnpm --filter @gamma-code/desktop dev",
+    "build": "turbo build",
+    "build:all": "pnpm --filter @gamma-code/web build && pnpm --filter @gamma-code/server build && pnpm --filter @gamma-code/desktop build",
+    "typecheck": "turbo typecheck",
+    "desktop:build": "pnpm --filter @gamma-code/desktop build",
+    "dist": "pnpm --filter @gamma-code/desktop dist",
+    "dist:mac": "pnpm --filter @gamma-code/desktop dist:mac",
+    "dist:win": "pnpm --filter @gamma-code/desktop dist:win",
+    "dist:linux": "pnpm --filter @gamma-code/desktop dist:linux",
+    "postinstall": "chmod +x node_modules/.pnpm/node-pty@*/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper 2>/dev/null || true",
+    "format": "prettier --write \"**/*.{ts,tsx,css,html,json,md,yaml,yml}\""
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.9",
+    "prettier": "^3.6.2",
+    "turbo": "^2.5.5",
+    "typescript": "^5.9.2"
+  }
+}

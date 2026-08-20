@@ -1,0 +1,680 @@
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  shell,
+  Menu,
+  MenuItemConstructorOptions,
+} from "electron"
+import { spawn, type ChildProcess } from "node:child_process"
+import { setTimeout as delay } from "node:timers/promises"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
+import { createServer as createHttpServer, type Server } from "node:http"
+import { readFileSync, existsSync } from "node:fs"
+import electronUpdater from "electron-updater"
+import log from "electron-log"
+
+const { autoUpdater } = electronUpdater
+
+// Set app name before anything else
+app.setName("Gamma Code")
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
+const isDevelopment = !app.isPackaged
+const repoRoot = path.resolve(__dirname, "../../..")
+const nodeBinPath =
+  process.env.PATH?.split(":")
+    .find((p) => p.includes("node"))
+    ?.split("/bin")[0] + "/bin" || "/usr/local/bin"
+
+const APP_ID = "com.gammacode.app"
+const CURRENT_VERSION = "0.1.0"
+const UPDATE_REPO = "Thisisaarush/GammaCode"
+
+let serverProcess: ChildProcess | null = null
+let webProcess: ChildProcess | null = null
+let httpServer: Server | null = null
+let mainWindow: BrowserWindow | null = null
+
+// Configure electron-updater
+autoUpdater.autoDownload = false
+autoUpdater.autoInstallOnAppQuit = true
+autoUpdater.logger = log
+
+autoUpdater.on("update-available", (info) => {
+  log.info("[update] Update available:", info.version)
+  mainWindow?.webContents.send("update-available", {
+    tag_name: `v${info.version}`,
+    name: info.version,
+    body: info.releaseNotes || "",
+    html_url: `https://github.com/${UPDATE_REPO}/releases/tag/v${info.version}`,
+    published_at: info.releaseDate,
+  })
+})
+
+autoUpdater.on("update-downloaded", (info) => {
+  log.info("[update] Update downloaded:", info.version)
+  mainWindow?.webContents.send("update-downloaded", {
+    tag_name: `v${info.version}`,
+    name: info.version,
+    body: "",
+    html_url: `https://github.com/${UPDATE_REPO}/releases/tag/v${info.version}`,
+    published_at: "",
+  })
+})
+
+autoUpdater.on("error", (error) => {
+  log.error("[update] Auto-updater error:", error)
+})
+
+interface GitHubRelease {
+  tag_name: string
+  name: string
+  body: string
+  html_url: string
+  published_at: string
+}
+
+async function checkForUpdates(): Promise<{
+  hasUpdate: boolean
+  release?: GitHubRelease
+}> {
+  try {
+    const result = await autoUpdater.checkForUpdates()
+    if (result?.updateInfo) {
+      const latestVersion = result.updateInfo.version
+      const hasUpdate = compareVersions(latestVersion, CURRENT_VERSION) > 0
+      return {
+        hasUpdate,
+        release: hasUpdate
+          ? {
+              tag_name: `v${latestVersion}`,
+              name: latestVersion,
+              body: result.updateInfo.releaseNotes?.toString() || "",
+              html_url: `https://github.com/${UPDATE_REPO}/releases/tag/v${latestVersion}`,
+              published_at: result.updateInfo.releaseDate || "",
+            }
+          : undefined,
+      }
+    }
+    return { hasUpdate: false }
+  } catch (error) {
+    log.error("[update] Failed to check for updates:", error)
+    return { hasUpdate: false }
+  }
+}
+
+function compareVersions(v1: string, v2: string): number {
+  const parts1 = v1.split(".").map(Number)
+  const parts2 = v2.split(".").map(Number)
+
+  for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+    const p1 = parts1[i] || 0
+    const p2 = parts2[i] || 0
+    if (p1 > p2) return 1
+    if (p1 < p2) return -1
+  }
+  return 0
+}
+
+function showUpdateDialog(release: GitHubRelease): void {
+  const version = release.tag_name.replace(/^v/, "")
+  dialog
+    .showMessageBox(mainWindow!, {
+      type: "info",
+      title: "Update Available",
+      message: `A new version (${version}) is available.`,
+      detail: `Gamma Code ${version} has been released. Would you like to download and install it now?`,
+      buttons: ["Install Now", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+    })
+    .then(async (result) => {
+      if (result.response === 0) {
+        try {
+          log.log("[update] Downloading update...")
+          await autoUpdater.downloadUpdate()
+          dialog
+            .showMessageBox(mainWindow!, {
+              type: "info",
+              title: "Update Ready",
+              message: "Update downloaded successfully.",
+              detail: "The application will restart to install the update.",
+              buttons: ["Restart Now"],
+              defaultId: 0,
+            })
+            .then(() => {
+              autoUpdater.quitAndInstall()
+            })
+        } catch (error) {
+          log.error("[update] Failed to download update:", error)
+          dialog.showMessageBox(mainWindow!, {
+            type: "error",
+            title: "Update Failed",
+            message: "Failed to download the update.",
+            detail: String(error),
+            buttons: ["OK"],
+          })
+        }
+      }
+    })
+}
+
+function createMenu() {
+  const template: MenuItemConstructorOptions[] = [
+    {
+      label: "Gamma Code",
+      submenu: [
+        {
+          label: "About Gamma Code",
+          click: () => {
+            dialog.showMessageBox(mainWindow!, {
+              type: "info",
+              title: "About Gamma Code",
+              message: "Gamma Code",
+              detail: `Version ${CURRENT_VERSION}\n\n`,
+            })
+          },
+        },
+        { type: "separator" },
+        {
+          label: "Check for Updates...",
+          click: async () => {
+            const result = await checkForUpdates()
+            if (result.hasUpdate && result.release) {
+              showUpdateDialog(result.release)
+            } else {
+              dialog.showMessageBox({
+                type: "info",
+                title: "No Updates",
+                message: `You're running the latest version (${CURRENT_VERSION}).`,
+              })
+            }
+          },
+        },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    },
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "selectAll" },
+      ],
+    },
+    {
+      label: "View",
+      submenu: [
+        { role: "reload" },
+        { role: "forceReload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
+    {
+      label: "Window",
+      submenu: [
+        { role: "minimize" },
+        { role: "zoom" },
+        { type: "separator" },
+        { role: "front" },
+      ],
+    },
+    {
+      label: "Help",
+      submenu: [
+        {
+          label: "Learn More",
+          click: async () => {
+            await shell.openExternal("https://github.com/" + UPDATE_REPO)
+          },
+        },
+      ],
+    },
+  ]
+
+  const menu = Menu.buildFromTemplate(template)
+  Menu.setApplicationMenu(menu)
+}
+
+async function waitForUrl(url: string, attempts = 60) {
+  for (let index = 0; index < attempts; index += 1) {
+    try {
+      const response = await fetch(url)
+      if (response.ok) {
+        return true
+      }
+    } catch {
+      // Keep waiting.
+    }
+
+    await delay(500)
+  }
+
+  return false
+}
+
+function startProcess(command: string, args: string[], name: string) {
+  const child = spawn(command, args, {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      PATH: `${nodeBinPath}:${process.env.PATH ?? ""}`,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  })
+
+  child.stdout?.on("data", (chunk: Buffer) => {
+    process.stdout.write(`[${name}] ${chunk.toString()}`)
+  })
+
+  child.stderr?.on("data", (chunk: Buffer) => {
+    process.stderr.write(`[${name}] ${chunk.toString()}`)
+  })
+
+  child.on("error", (error) => {
+    log.error(`[${name}] process error:`, error.message)
+  })
+
+  child.on("exit", (code) => {
+    log.log(`[${name}] exited with code ${code}`)
+  })
+
+  return child
+}
+
+async function ensureDevelopmentServices() {
+  if (!isDevelopment) {
+    return
+  }
+
+  // Check if server is already running
+  const serverAlreadyUp = await waitForUrl("http://127.0.0.1:3030/health", 2)
+  if (!serverAlreadyUp) {
+    log.log("[desktop] Starting server...")
+    serverProcess = startProcess(
+      "pnpm",
+      ["--filter", "@gamma-code/server", "dev"],
+      "server",
+    )
+  } else {
+    log.log("[desktop] Server already running.")
+  }
+
+  // Check if web is already running
+  const webAlreadyUp = await waitForUrl("http://127.0.0.1:3000", 2)
+  if (!webAlreadyUp) {
+    log.log("[desktop] Starting web...")
+    webProcess = startProcess(
+      "pnpm",
+      ["--filter", "@gamma-code/web", "dev"],
+      "web",
+    )
+  } else {
+    log.log("[desktop] Web already running.")
+  }
+
+  // Wait for both to be ready (up to 30 seconds)
+  log.log("[desktop] Waiting for services to be ready...")
+  const [nextServerReady, nextWebReady] = await Promise.all([
+    serverAlreadyUp || waitForUrl("http://127.0.0.1:3030/health", 60),
+    webAlreadyUp || waitForUrl("http://127.0.0.1:3000", 60),
+  ])
+
+  if (!nextServerReady) {
+    log.error("[desktop] Server failed to start within timeout.")
+  }
+  if (!nextWebReady) {
+    log.error("[desktop] Web failed to start within timeout.")
+  }
+
+  if (!nextServerReady || !nextWebReady) {
+    throw new Error(
+      "Gamma Code could not start the local web/server processes.",
+    )
+  }
+
+  log.log("[desktop] All services ready.")
+}
+
+function serveProductionWeb(win: BrowserWindow) {
+  const webDistPath = isDevelopment
+    ? path.resolve(repoRoot, "apps/web/dist")
+    : path.resolve(__dirname, "../../web/dist")
+
+  const indexPath = path.resolve(webDistPath, "index.html")
+
+  log.log("[desktop] Serving web from:", webDistPath)
+
+  // Simple static file server
+  httpServer = createHttpServer((req, res) => {
+    const requestUrl = req.url ?? "/"
+    let filePath = path.join(
+      webDistPath,
+      requestUrl === "/" ? "index.html" : requestUrl,
+    )
+
+    // Security: prevent directory traversal
+    if (!filePath.startsWith(webDistPath)) {
+      res.writeHead(403)
+      res.end("Forbidden")
+      return
+    }
+
+    if (
+      !existsSync(filePath) ||
+      (!filePath.endsWith(".html") && !existsSync(filePath))
+    ) {
+      // Try adding .html or index.html
+      if (existsSync(filePath + ".html")) {
+        filePath = filePath + ".html"
+      } else if (existsSync(path.join(filePath, "index.html"))) {
+        filePath = path.join(filePath, "index.html")
+      } else {
+        res.writeHead(404)
+        res.end("Not Found")
+        return
+      }
+    }
+
+    try {
+      const content = readFileSync(filePath)
+      const ext = path.extname(filePath)
+      const contentType =
+        ext === ".html"
+          ? "text/html"
+          : ext === ".js"
+            ? "application/javascript"
+            : ext === ".css"
+              ? "text/css"
+              : "text/plain"
+
+      res.writeHead(200, { "Content-Type": contentType })
+      res.end(content)
+    } catch (err) {
+      res.writeHead(500)
+      res.end("Server Error")
+    }
+  })
+
+  httpServer.listen(3000, "127.0.0.1", () => {
+    log.log("[desktop] Local web server running on http://127.0.0.1:3000")
+  })
+
+  return waitForUrl("http://127.0.0.1:3000", 30)
+}
+
+async function startProductionServer() {
+  const serverDistPath = isDevelopment
+    ? path.resolve(repoRoot, "apps/server/dist/index.js")
+    : path.resolve(__dirname, "../../server/dist/index.js")
+
+  log.log("[desktop] Starting server from:", serverDistPath)
+
+  // Start the server process
+  serverProcess = spawn(process.execPath, [serverDistPath], {
+    cwd: path.dirname(serverDistPath),
+    env: {
+      ...process.env,
+      NODE_ENV: "production",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  })
+
+  serverProcess.stdout?.on("data", (chunk: Buffer) => {
+    process.stdout.write(`[server] ${chunk.toString()}`)
+  })
+
+  serverProcess.stderr?.on("data", (chunk: Buffer) => {
+    process.stderr.write(`[server] ${chunk.toString()}`)
+  })
+
+  serverProcess.on("error", (error) => {
+    log.error("[server] process error:", error.message)
+  })
+
+  serverProcess.on("exit", (code) => {
+    log.log("[server] exited with code", code)
+  })
+
+  // Wait for server to be ready
+  const serverReady = await waitForUrl("http://127.0.0.1:3030/health", 60)
+  if (!serverReady) {
+    throw new Error("Server failed to start")
+  }
+
+  log.log("[desktop] Server ready")
+}
+
+async function createWindow() {
+  let win: BrowserWindow
+
+  if (isDevelopment) {
+    await ensureDevelopmentServices()
+    win = new BrowserWindow({
+      width: 1480,
+      height: 960,
+      minWidth: 1100,
+      minHeight: 720,
+      backgroundColor: "#101010",
+      ...(process.platform === "darwin"
+        ? {
+            titleBarStyle: "hiddenInset",
+            trafficLightPosition: { x: 12, y: 12 },
+          }
+        : {
+            frame: false,
+          }),
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        preload: path.resolve(__dirname, "../preload.cjs"),
+      },
+    })
+
+    await win.loadURL(process.env.GAMMA_CODE_WEB_URL ?? "http://127.0.0.1:3000")
+    win.webContents.openDevTools({ mode: "detach" })
+  } else {
+    // Production: start server and serve web
+    await startProductionServer()
+    win = new BrowserWindow({
+      width: 1480,
+      height: 960,
+      minWidth: 1100,
+      minHeight: 720,
+      backgroundColor: "#101010",
+      ...(process.platform === "darwin"
+        ? {
+            titleBarStyle: "hiddenInset",
+            trafficLightPosition: { x: 12, y: 12 },
+          }
+        : {
+            frame: false,
+          }),
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        preload: path.resolve(__dirname, "../preload.cjs"),
+      },
+    })
+
+    await serveProductionWeb(win)
+    await win.loadURL("http://127.0.0.1:3000")
+  }
+
+  // Save reference to main window
+  mainWindow = win
+
+  // IPC: window control buttons (minimize, maximize/restore, close)
+  ipcMain.on("window-control", (_event, action: string) => {
+    const focused = BrowserWindow.getFocusedWindow()
+    if (!focused) return
+    switch (action) {
+      case "minimize":
+        focused.minimize()
+        break
+      case "maximize":
+        if (focused.isMaximized()) {
+          focused.unmaximize()
+        } else {
+          focused.maximize()
+        }
+        break
+      case "close":
+        focused.close()
+        break
+    }
+  })
+
+  // Open external links (target="_blank") in the system browser
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      shell.openExternal(url)
+    }
+    return { action: "deny" }
+  })
+
+  // Prevent in-app navigation away from the app
+  win.webContents.on("will-navigate", (event, url) => {
+    const appOrigin = "http://127.0.0.1:3000"
+    if (!url.startsWith(appOrigin)) {
+      event.preventDefault()
+      shell.openExternal(url)
+    }
+  })
+
+  // IPC: open URL in system browser (for xterm links, programmatic use)
+  ipcMain.on("open-external", (_event, url: string) => {
+    if (
+      typeof url === "string" &&
+      (url.startsWith("http://") || url.startsWith("https://"))
+    ) {
+      shell.openExternal(url)
+    }
+  })
+
+  // IPC: native folder picker for workspace switching
+  ipcMain.handle("pick-folder", async () => {
+    const result = await dialog.showOpenDialog(win, {
+      title: "Open Project Folder",
+      properties: ["openDirectory"],
+    })
+    if (result.canceled || result.filePaths.length === 0) {
+      return null
+    }
+    return result.filePaths[0]
+  })
+}
+
+function cleanup() {
+  if (serverProcess && !serverProcess.killed) {
+    serverProcess.kill()
+    serverProcess = null
+  }
+  if (webProcess && !webProcess.killed) {
+    webProcess.kill()
+    webProcess = null
+  }
+  if (httpServer) {
+    httpServer.close()
+    httpServer = null
+  }
+}
+
+app.whenReady().then(async () => {
+  // IPC handlers - register before creating window
+  ipcMain.handle("check-for-updates", async () => {
+    return await checkForUpdates()
+  })
+
+  ipcMain.handle("download-update", async () => {
+    try {
+      await autoUpdater.downloadUpdate()
+      return { success: true }
+    } catch (error) {
+      log.error("[update] Failed to download update:", error)
+      return { success: false, error: String(error) }
+    }
+  })
+
+  ipcMain.handle("install-update", async () => {
+    autoUpdater.quitAndInstall()
+  })
+
+  ipcMain.handle("get-app-version", () => {
+    return CURRENT_VERSION
+  })
+
+  ipcMain.handle("open-external-url", async (_event, url: string) => {
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      await shell.openExternal(url)
+    }
+  })
+
+  // Create application menu
+  createMenu()
+
+  // Create the main window
+  await createWindow()
+
+  // Check for updates on startup (production only, with delay)
+  if (!isDevelopment) {
+    setTimeout(async () => {
+      log.log("[desktop] Checking for updates...")
+      const result = await checkForUpdates()
+      if (result.hasUpdate && result.release) {
+        log.log("[desktop] Update available:", result.release.tag_name)
+        showUpdateDialog(result.release)
+      }
+    }, 5000)
+
+    // Check for updates daily
+    const CHECK_INTERVAL = 24 * 60 * 60 * 1000 // 24 hours
+    setInterval(async () => {
+      log.log("[desktop] Daily update check...")
+      const result = await checkForUpdates()
+      if (result.hasUpdate && result.release) {
+        log.log("[desktop] Update available:", result.release.tag_name)
+        showUpdateDialog(result.release)
+      }
+    }, CHECK_INTERVAL)
+  }
+
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow().catch((error) => {
+        log.error("[desktop] Failed to create window on activate:", error)
+      })
+    }
+  })
+})
+
+app.on("window-all-closed", () => {
+  cleanup()
+  if (process.platform !== "darwin") {
+    app.quit()
+  }
+})
+
+app.on("before-quit", () => {
+  cleanup()
+})
