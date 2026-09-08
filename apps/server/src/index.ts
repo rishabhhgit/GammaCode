@@ -1322,11 +1322,42 @@ function buildAiToolsAnthropic() {
   }));
 }
 
+function mapJsonTypeToSchemaType(jsonType: string): SchemaType {
+  switch (jsonType) {
+    case "string": return SchemaType.STRING;
+    case "number": return SchemaType.NUMBER;
+    case "integer": return SchemaType.INTEGER;
+    case "boolean": return SchemaType.BOOLEAN;
+    case "array": return SchemaType.ARRAY;
+    case "object": return SchemaType.OBJECT;
+    default: return SchemaType.STRING;
+  }
+}
+
+function convertToGeminiSchema(param: Record<string, unknown>): Record<string, unknown> {
+  const schema: Record<string, unknown> = {
+    type: mapJsonTypeToSchemaType(String(param.type ?? "string"))
+  };
+  if (param.description) schema.description = param.description;
+  if (param.enum) schema.enum = param.enum;
+  if (param.type === "array" && param.items) {
+    schema.items = convertToGeminiSchema(param.items as Record<string, unknown>);
+  }
+  if (param.type === "object" && param.properties) {
+    const props = param.properties as Record<string, Record<string, unknown>>;
+    schema.properties = Object.fromEntries(
+      Object.entries(props).map(([k, v]) => [k, convertToGeminiSchema(v)])
+    );
+  }
+  if (param.required) schema.required = param.required;
+  return schema;
+}
+
 function buildAiToolsGemini() {
   return buildAiToolsOpenAI().map((t) => ({
     name: t.function.name,
     description: t.function.description,
-    parameters: t.function.parameters
+    parameters: convertToGeminiSchema(t.function.parameters)
   }));
 }
 
@@ -2526,11 +2557,7 @@ async function callGeminiStream(
     functionDeclarations: buildAiToolsGemini().map((t) => ({
       name: t.name,
       description: t.description,
-      parameters: {
-        type: SchemaType.OBJECT,
-        properties: t.parameters.properties,
-        required: t.parameters.required
-      }
+      parameters: t.parameters as Record<string, unknown>
     }))
   }];
 
