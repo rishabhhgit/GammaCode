@@ -1815,11 +1815,31 @@ async function callGemini(
   const systemMessage = messages.find((m) => m.role === "system");
   const chatMessages = messages.filter((m) => m.role !== "system");
 
-  // Build SDK-compatible history
-  const history = chatMessages.slice(0, -1).map((m) => ({
-    role: m.role === "assistant" ? "model" as const : "user" as const,
-    parts: [{ text: m.content }]
-  }));
+  // Build SDK-compatible history — matches opencode's convertMessages
+  const history: Content[] = [];
+  for (let i = 0; i < chatMessages.length - 1; i++) {
+    const m = chatMessages[i];
+
+    if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
+      const parts: Part[] = [];
+      if (m.content) parts.push({ text: m.content });
+      for (const tc of m.tool_calls) {
+        let argsObj: Record<string, unknown> = {};
+        try { argsObj = JSON.parse(tc.function.arguments); } catch { /* empty */ }
+        parts.push({ functionCall: { name: tc.function.name, args: argsObj } });
+      }
+      history.push({ role: "model", parts });
+    } else if (m.role === "tool") {
+      let resultObj: unknown;
+      try { resultObj = JSON.parse(m.content); } catch { resultObj = { result: m.content }; }
+      history.push({
+        role: "function",
+        parts: [{ functionResponse: { name: m.name ?? "unknown", response: resultObj as Record<string, unknown> } }]
+      });
+    } else {
+      history.push({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] });
+    }
+  }
 
   const modelInstance = genAI.getGenerativeModel({
     model,
@@ -1867,7 +1887,6 @@ interface StreamResult {
   usage?: UsageData;
   toolCalls?: Array<{ id: string; name: string; arguments: string }>;
   fileChanges?: FileChange[];
-  toolSignatures?: Record<string, string>;
 }
 
 /** Parse SSE lines from a readable stream, calling onToken for each content delta.
@@ -2466,11 +2485,10 @@ async function callGeminiStream(
   const systemMessage = messages.find((m) => m.role === "system");
   const chatMessages = messages.filter((m) => m.role !== "system");
 
-  // Build SDK-compatible history (all messages except the last user message)
+  // Build SDK-compatible history — matches opencode's convertMessages exactly
   const history: Content[] = [];
   for (let i = 0; i < chatMessages.length - 1; i++) {
     const m = chatMessages[i];
-    if (m.role === "system") continue;
 
     if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
       // Model message with function calls
@@ -2483,20 +2501,14 @@ async function callGeminiStream(
       }
       history.push({ role: "model", parts });
     } else if (m.role === "tool") {
-      // Tool results become a user message with functionResponse parts
-      const toolParts: Part[] = [];
-      // Collect consecutive tool messages
-      while (i < chatMessages.length && chatMessages[i].role === "tool") {
-        const toolMsg = chatMessages[i];
-        let resultObj: unknown;
-        try { resultObj = JSON.parse(toolMsg.content); } catch { resultObj = { result: toolMsg.content }; }
-        toolParts.push({ functionResponse: { name: toolMsg.name ?? "unknown", response: resultObj as Record<string, unknown> } });
-        i++;
-      }
-      i--; // for loop will increment
-      if (toolParts.length > 0) {
-        history.push({ role: "user", parts: toolParts });
-      }
+      // Tool results — EACH result is a separate Content with role "function"
+      // This is how opencode does it (not batched into one user message)
+      let resultObj: unknown;
+      try { resultObj = JSON.parse(m.content); } catch { resultObj = { result: m.content }; }
+      history.push({
+        role: "function",
+        parts: [{ functionResponse: { name: m.name ?? "unknown", response: resultObj as Record<string, unknown> } }]
+      });
     } else {
       const parts: Part[] = [];
       if (m.content) parts.push({ text: m.content });
@@ -2509,7 +2521,7 @@ async function callGeminiStream(
     }
   }
 
-  // Build the model with tools
+  // Build the model with tools — all in ONE Tool object (opencode pattern)
   const geminiTools = [{
     functionDeclarations: buildAiToolsGemini().map((t) => ({
       name: t.name,
@@ -2536,7 +2548,7 @@ async function callGeminiStream(
       const chat = modelInstance.startChat({ history });
       const lastMsg = chatMessages[chatMessages.length - 1];
 
-      // Build parts for the last message (handle attachments)
+      // Build parts for the last message
       const lastParts: Part[] = [];
       if (lastMsg.content) lastParts.push({ text: lastMsg.content });
       if (lastMsg.attachments) {
@@ -2545,15 +2557,15 @@ async function callGeminiStream(
         }
       }
 
-      const result = await chat.sendMessageStream(lastParts.length === 1 && lastParts[0].text ? lastMsg.content : lastParts);
+      const result = await chat.sendMessageStream(lastParts);
 
       let fullContent = "";
       let inputTokens = 0;
       let outputTokens = 0;
       const toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
+      const seenToolCalls = new Set<string>(); // Dedup like opencode
 
       for await (const chunk of result.stream) {
-        // Check abort
         if (signal?.aborted) break;
 
         const candidates = (chunk as unknown as Record<string, unknown>).candidates as Array<{ content?: { parts?: Array<Record<string, unknown>> } }> | undefined;
@@ -2567,16 +2579,22 @@ async function callGeminiStream(
           if (part.functionCall && typeof part.functionCall === "object") {
             const fc = part.functionCall as { name?: string; args?: Record<string, unknown> };
             if (fc.name) {
-              toolCalls.push({
-                id: `tool_${toolCalls.length}`,
-                name: fc.name,
-                arguments: JSON.stringify(fc.args ?? {})
-              });
+              const argsStr = JSON.stringify(fc.args ?? {});
+              // Deduplicate like opencode (Gemini can emit duplicate FunctionCall parts)
+              const dedupKey = `${fc.name}:${argsStr}`;
+              if (!seenToolCalls.has(dedupKey)) {
+                seenToolCalls.add(dedupKey);
+                toolCalls.push({
+                  id: `tool_${toolCalls.length}`,
+                  name: fc.name,
+                  arguments: argsStr
+                });
+              }
             }
           }
         }
 
-        // Extract usage from the final chunk
+        // Extract usage from final chunk
         const usageMeta = (chunk as unknown as Record<string, unknown>).usageMetadata as { promptTokenCount?: number; candidatesTokenCount?: number } | undefined;
         if (usageMeta?.promptTokenCount) {
           inputTokens = usageMeta.promptTokenCount;
@@ -2710,10 +2728,6 @@ async function callAIStream(
         content: result.content,
         tool_calls: assistantToolCalls
       };
-      // Include toolSignatures for Gemini's thought_signature requirement
-      if (result.toolSignatures) {
-        (assistantMsg as unknown as Record<string, unknown>).toolSignatures = result.toolSignatures;
-      }
       chatMessages.push(assistantMsg);
 
       // Execute each tool call and append results
