@@ -2541,6 +2541,7 @@ async function callGeminiStream(
   }
 
   logger.info(`[ai-stream] Calling ${config.label} (${model}) at ${config.baseUrl}/models/${model}:streamGenerateContent`);
+  logger.info(`[ai-stream] Request body keys: ${Object.keys(body).join(", ")}`);
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2550,6 +2551,7 @@ async function callGeminiStream(
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => "");
+    logger.error(`[ai-stream] Gemini API error ${response.status}: ${errorBody.slice(0, 500)}`);
     throw new Error(`HTTP ${response.status}: ${errorBody.slice(0, 500)}`);
   }
 
