@@ -1821,8 +1821,7 @@ async function callGemini(
     contents,
     generationConfig: {
       maxOutputTokens: 8192,
-      temperature: 0.2,
-      thinkingConfig: { thinkingBudget: 0 }
+      temperature: 0.2
     }
   };
 
@@ -2531,8 +2530,7 @@ async function callGeminiStream(
     contents,
     generationConfig: {
       maxOutputTokens: 8192,
-      temperature: 0.2,
-      thinkingConfig: { thinkingBudget: 0 }
+      temperature: 0.2
     },
     tools: [{ functionDeclarations: buildAiToolsGemini() }],
     toolConfig: { functionCallingConfig: { mode: "AUTO" } }
