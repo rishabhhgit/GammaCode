@@ -1846,7 +1846,7 @@ async function callGemini(
   const systemMessage = messages.find((m) => m.role === "system");
   const chatMessages = messages.filter((m) => m.role !== "system");
 
-  // Build SDK-compatible history — batch tool results into single user messages
+  // Build SDK-compatible history — each tool result is a separate "function" role message
   const history: Content[] = [];
   for (let i = 0; i < chatMessages.length - 1; i++) {
     const m = chatMessages[i];
@@ -1861,18 +1861,12 @@ async function callGemini(
       }
       history.push({ role: "model", parts });
     } else if (m.role === "tool") {
-      const funcParts: Part[] = [];
-      while (i < chatMessages.length && chatMessages[i].role === "tool") {
-        const toolMsg = chatMessages[i];
-        let resultObj: unknown;
-        try { resultObj = JSON.parse(toolMsg.content); } catch { resultObj = { result: toolMsg.content }; }
-        funcParts.push({ functionResponse: { name: toolMsg.name ?? "unknown", response: resultObj as Record<string, unknown> } });
-        i++;
-      }
-      i--;
-      if (funcParts.length > 0) {
-        history.push({ role: "user", parts: funcParts });
-      }
+      let resultObj: unknown;
+      try { resultObj = JSON.parse(m.content); } catch { resultObj = { result: m.content }; }
+      history.push({
+        role: "function",
+        parts: [{ functionResponse: { name: m.name ?? "unknown", response: resultObj as Record<string, unknown> } }]
+      });
     } else {
       history.push({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] });
     }
@@ -2523,8 +2517,8 @@ async function callGeminiStream(
   const chatMessages = messages.filter((m) => m.role !== "system");
 
   // Build SDK-compatible history
-  // CRITICAL: Gemini requires alternating user/model roles.
-  // Tool results (function responses) must be batched into ONE user message per round.
+  // Each tool result is a separate Content with role "function" — the SDK validates this.
+  // Do NOT batch into role "user" — the SDK rejects functionResponse parts in user role.
   const history: Content[] = [];
   for (let i = 0; i < chatMessages.length - 1; i++) {
     const m = chatMessages[i];
@@ -2539,19 +2533,12 @@ async function callGeminiStream(
       }
       history.push({ role: "model", parts });
     } else if (m.role === "tool") {
-      // Collect ALL consecutive tool results into ONE user message with functionResponse parts
-      const funcParts: Part[] = [];
-      while (i < chatMessages.length && chatMessages[i].role === "tool") {
-        const toolMsg = chatMessages[i];
-        let resultObj: unknown;
-        try { resultObj = JSON.parse(toolMsg.content); } catch { resultObj = { result: toolMsg.content }; }
-        funcParts.push({ functionResponse: { name: toolMsg.name ?? "unknown", response: resultObj as Record<string, unknown> } });
-        i++;
-      }
-      i--; // for loop will increment again
-      if (funcParts.length > 0) {
-        history.push({ role: "user", parts: funcParts });
-      }
+      let resultObj: unknown;
+      try { resultObj = JSON.parse(m.content); } catch { resultObj = { result: m.content }; }
+      history.push({
+        role: "function",
+        parts: [{ functionResponse: { name: m.name ?? "unknown", response: resultObj as Record<string, unknown> } }]
+      });
     } else {
       const parts: Part[] = [];
       if (m.content) parts.push({ text: m.content });
