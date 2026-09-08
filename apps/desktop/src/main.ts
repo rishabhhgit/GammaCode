@@ -492,7 +492,6 @@ async function createWindow() {
     })
 
     await win.loadURL(process.env.GAMMA_CODE_WEB_URL ?? "http://127.0.0.1:3000")
-    win.webContents.openDevTools({ mode: "detach" })
   } else {
     // Production: start server and serve web
     await startProductionServer()

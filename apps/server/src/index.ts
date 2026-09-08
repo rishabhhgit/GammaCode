@@ -1037,6 +1037,14 @@ async function fetchModelsForProvider(config: ProviderConfig): Promise<string[]>
           return prefixes.some((p) => id.startsWith(p));
         })
         .slice(0, 50); // Cap at 50 to keep the dropdown manageable
+    } else if (config.format === "gemini") {
+      const res = await fetch(`${config.baseUrl}/models?key=${apiKey}`);
+      if (!res.ok) throw new Error(`Gemini /models returned ${res.status}`);
+      const data = (await res.json()) as { models?: Array<{ name: string }> };
+      models = (data.models ?? [])
+        .map((m) => m.name.replace("models/", ""))
+        .filter((id) => id.includes("gemini"))
+        .sort();
     }
 
     if (models.length > 0) {

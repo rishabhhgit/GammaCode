@@ -167,6 +167,9 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   // Gemini 1.5
   "gemini-1.5-pro": 2000000,
   "gemini-1.5-flash": 1000000,
+  // Gemini 3
+  "gemini-3-flash": 1000000,
+  "gemini-3.1-pro-preview": 2000000,
   // Grok
   "grok-2": 131072,
   "grok-beta": 131072,
@@ -4151,7 +4154,7 @@ export default function App() {
                 </div>
 
                 {/* API Key providers: OpenAI, Anthropic, OpenRouter */}
-                {(["openai", "anthropic", "openrouter"] as const).map(
+                {(["openai", "anthropic", "openrouter", "gemini"] as const).map(
                   (providerId) => {
                     const providerInfo = authStatus?.providers.find(
                       (p) => p.id === providerId,
