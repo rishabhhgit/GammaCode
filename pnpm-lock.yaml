@@ -45,6 +45,9 @@ importers:
       '@gamma-code/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      dotenv:
+        specifier: ^16.4.7
+        version: 16.6.1
       node-pty:
         specifier: ^1.1.0
         version: 1.1.0

@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { EventEmitter } from "node:events";
 import { homedir } from "node:os";
+import { config as loadDotenv } from "dotenv";
 import nodePty from "node-pty";
 import { WebSocketServer, WebSocket } from "ws";
 import { loadConfig } from "./config.js";
@@ -39,6 +40,10 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Load .env file from server directory
+loadDotenv({ path: path.join(__dirname, "../.env") });
+
 let workspaceRoot = process.env.WORKSPACE_ROOT
   ? path.resolve(process.env.WORKSPACE_ROOT)
   : path.resolve(__dirname, "../../..");
