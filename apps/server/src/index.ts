@@ -10,9 +10,10 @@ import { homedir } from "node:os";
 import { config as loadDotenv } from "dotenv";
 import nodePty from "node-pty";
 import { WebSocketServer, WebSocket } from "ws";
-import { loadConfig } from "./config.js";
+import { BasicRagEngine, type DocumentChunk } from "./rag.js";
 import { registerTool } from "./registry.js";
 import { getToolPermission, getPluginPermission, type ToolAction } from "./permissions.js";
+import { loadConfig } from "./config.js";
 import { listSkills, readSkill, type SkillEntry } from "./skills.js";
 import { resolveAgents, getDefaultAgent, getAgentById } from "./agents.js";
 import { loadPlugins, type PluginRuntime } from "./plugins.js";
@@ -1830,11 +1831,25 @@ async function callGemini(
   }
 
   logger.info(`[ai] Calling ${config.label} (${model}) at ${config.baseUrl}/models/${model}:generateContent`);
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  });
+  let response: Response = new Response();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+
+    if (response.status === 429) {
+      const errorBody = await response.text().catch(() => "");
+      const retryMatch = errorBody.match(/retry in ([\d.]+)/);
+      const retrySeconds = retryMatch ? parseFloat(retryMatch[1]) : 15;
+      const waitMs = Math.min((retrySeconds + 1) * 1000, 30000);
+      logger.warn(`[ai] Rate limited (429), retrying in ${Math.round(waitMs / 1000)}s (attempt ${attempt + 1}/3)`);
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      continue;
+    }
+    break;
+  }
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => "");
@@ -2534,25 +2549,42 @@ async function callGeminiStream(
 
   logger.info(`[ai-stream] Calling ${config.label} (${model}) at ${config.baseUrl}/models/${model}:streamGenerateContent`);
   logger.info(`[ai-stream] Request body keys: ${Object.keys(body).join(", ")}`);
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal
-  });
+  // Retry on 429 rate limits (up to 3 attempts with exponential backoff)
+  let streamResponse: Response = new Response();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    streamResponse = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal
+    });
 
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
-    logger.error(`[ai-stream] Gemini API error ${response.status}: ${errorBody.slice(0, 500)}`);
-    throw new Error(`HTTP ${response.status}: ${errorBody.slice(0, 500)}`);
+    if (streamResponse.status === 429) {
+      const errorBody = await streamResponse.text().catch(() => "");
+      const retryMatch = errorBody.match(/retry in ([\d.]+)/);
+      const retrySeconds = retryMatch ? parseFloat(retryMatch[1]) : 15;
+      const waitMs = Math.min((retrySeconds + 1) * 1000, 30000);
+      logger.warn(`[ai-stream] Rate limited (429), retrying in ${Math.round(waitMs / 1000)}s (attempt ${attempt + 1}/3)`);
+      onToken(`\n\n⏳ Rate limited. Retrying in ${Math.round(waitMs / 1000)}s...\n\n`);
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      continue;
+    }
+
+    break;
   }
 
-  if (!response.body) {
+  if (!streamResponse.ok) {
+    const errorBody = await streamResponse.text().catch(() => "");
+    logger.error(`[ai-stream] Gemini API error ${streamResponse.status}: ${errorBody.slice(0, 500)}`);
+    throw new Error(`HTTP ${streamResponse.status}: ${errorBody.slice(0, 500)}`);
+  }
+
+  if (!streamResponse.body) {
     throw new Error("No response body for streaming");
   }
 
   // Gemini SSE: each chunk has candidates[].content.parts[] with either text, functionCall, or thought
-  const reader = response.body.getReader();
+  const reader = streamResponse.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let fullContent = "";
