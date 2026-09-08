@@ -863,6 +863,9 @@ async function getAllProviderUsage(): Promise<ProviderUsageInfo[]> {
   // Anthropic — local tracking only
   results.push(getLocalUsage("anthropic"));
 
+  // Gemini — local tracking only
+  results.push(getLocalUsage("gemini"));
+
   return results;
 }
 
@@ -1218,6 +1221,14 @@ function buildAiToolsAnthropic() {
     name: t.function.name,
     description: t.function.description,
     input_schema: t.function.parameters
+  }));
+}
+
+function buildAiToolsGemini() {
+  return buildAiToolsOpenAI().map((t) => ({
+    name: t.function.name,
+    description: t.function.description,
+    parameters: t.function.parameters
   }));
 }
 
@@ -2253,17 +2264,43 @@ async function callGeminiStream(
   const systemMessage = messages.find((m) => m.role === "system");
   const chatMessages = messages.filter((m) => m.role !== "system");
 
-  const contents = chatMessages.map((m) => ({
-    role: m.role === "assistant" ? "model" : "user",
-    parts: [{ text: m.content }]
-  }));
+  // Build contents — handle tool results as user messages with functionResponse parts
+  const contents: Array<{ role: string; parts: Array<Record<string, unknown>> }> = [];
+  for (const m of chatMessages) {
+    if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
+      // Assistant message with tool calls → model message with functionCall parts
+      const parts: Array<Record<string, unknown>> = [];
+      if (m.content) parts.push({ text: m.content });
+      for (const tc of m.tool_calls) {
+        let argsObj: Record<string, unknown> = {};
+        try { argsObj = JSON.parse(tc.function.arguments); } catch { /* empty */ }
+        parts.push({ functionCall: { name: tc.function.name, args: argsObj } });
+      }
+      contents.push({ role: "model", parts });
+    } else if (m.role === "tool") {
+      // Tool result → user message with functionResponse part
+      let resultObj: unknown;
+      try { resultObj = JSON.parse(m.content); } catch { resultObj = { result: m.content }; }
+      contents.push({
+        role: "user",
+        parts: [{ functionResponse: { name: m.name ?? "unknown", response: resultObj } }]
+      });
+    } else {
+      contents.push({
+        role: m.role === "assistant" ? "model" : "user",
+        parts: [{ text: m.content }]
+      });
+    }
+  }
 
   const body: Record<string, unknown> = {
     contents,
     generationConfig: {
       maxOutputTokens: 16384,
       temperature: 0.3
-    }
+    },
+    tools: [{ functionDeclarations: buildAiToolsGemini() }],
+    toolConfig: { functionCallingConfig: { mode: "AUTO" } }
   };
 
   if (systemMessage?.content) {
@@ -2287,26 +2324,77 @@ async function callGeminiStream(
     throw new Error("No response body for streaming");
   }
 
-  return parseSSEStream(
-    response.body,
-    (parsed) => {
-      const candidates = parsed.candidates as Array<{ content?: { parts?: Array<{ text?: string }> } }> | undefined;
-      return candidates?.[0]?.content?.parts?.[0]?.text ?? null;
-    },
-    onToken,
-    signal,
-    (parsed) => {
-      const usageMetadata = parsed.usageMetadata as { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number } | undefined;
-      if (usageMetadata && typeof usageMetadata.promptTokenCount === "number") {
-        return {
-          inputTokens: usageMetadata.promptTokenCount,
-          outputTokens: usageMetadata.candidatesTokenCount ?? 0,
-          totalTokens: usageMetadata.totalTokenCount ?? (usageMetadata.promptTokenCount + (usageMetadata.candidatesTokenCount ?? 0))
-        };
+  // Gemini SSE: each chunk has candidates[].content.parts[] with either text or functionCall
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let fullContent = "";
+  let inputTokens = 0;
+  let outputTokens = 0;
+  const toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
+
+  try {
+    while (true) {
+      if (signal?.aborted) {
+        await reader.cancel();
+        break;
       }
-      return null;
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data: ")) continue;
+        const payload = trimmed.slice(6);
+        if (payload === "[DONE]") continue;
+
+        try {
+          const parsed = JSON.parse(payload) as Record<string, unknown>;
+          const candidates = parsed.candidates as Array<{ content?: { parts?: Array<Record<string, unknown>> } }> | undefined;
+          const parts = candidates?.[0]?.content?.parts ?? [];
+
+          for (const part of parts) {
+            if (typeof part.text === "string" && part.text) {
+              fullContent += part.text;
+              onToken(part.text);
+            }
+            if (part.functionCall && typeof part.functionCall === "object") {
+              const fc = part.functionCall as { name?: string; args?: Record<string, unknown> };
+              if (fc.name) {
+                toolCalls.push({
+                  id: `tool_${toolCalls.length}`,
+                  name: fc.name,
+                  arguments: JSON.stringify(fc.args ?? {})
+                });
+              }
+            }
+          }
+
+          // Extract usage metadata
+          const usageMetadata = parsed.usageMetadata as { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number } | undefined;
+          if (usageMetadata && typeof usageMetadata.promptTokenCount === "number") {
+            inputTokens = usageMetadata.promptTokenCount;
+            outputTokens = usageMetadata.candidatesTokenCount ?? 0;
+          }
+        } catch {
+          // skip malformed SSE lines
+        }
+      }
     }
-  );
+  } catch (err) {
+    if (signal?.aborted) {
+      const usage = inputTokens > 0 ? { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } : undefined;
+      return { content: fullContent || "[Streaming aborted]", usage, toolCalls: toolCalls.length > 0 ? toolCalls : undefined };
+    }
+    throw err;
+  }
+
+  const usage = inputTokens > 0 ? { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } : undefined;
+  return { content: fullContent || (toolCalls.length > 0 ? "" : "[No response from model]"), usage, toolCalls: toolCalls.length > 0 ? toolCalls : undefined };
 }
 
 /** Callback for tool-related SSE events */
