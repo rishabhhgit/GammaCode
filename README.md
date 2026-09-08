@@ -4,10 +4,6 @@ An AI-powered desktop code editor built with Electron, React, and Node.js. Think
 
 ![Gamma Code](https://img.shields.io/badge/status-active-brightgreen) ![License](https://img.shields.io/badge/license-MIT-blue) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
 
-## About
-
-Gamma Code is a local-first, AI-native code editor that lets you chat with AI models to read, write, and execute code directly in your workspace. Unlike cloud-based AI tools, Gamma Code runs entirely on your machine — your code never leaves your computer unless you choose to send it to an AI provider.
-
 ### Why Gamma Code?
 
 - **Privacy first** — All file operations happen locally. Only the prompts you send to AI providers leave your machine.
