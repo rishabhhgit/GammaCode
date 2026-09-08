@@ -1727,6 +1727,7 @@ interface StreamResult {
   usage?: UsageData;
   toolCalls?: Array<{ id: string; name: string; arguments: string }>;
   fileChanges?: FileChange[];
+  thoughtParts?: Array<Record<string, unknown>>;
 }
 
 /** Parse SSE lines from a readable stream, calling onToken for each content delta.
@@ -2331,6 +2332,13 @@ async function callGeminiStream(
       // Assistant message with tool calls → model message with functionCall parts
       const parts: Array<Record<string, unknown>> = [];
       if (m.content) parts.push({ text: m.content });
+      // Include thought parts with signatures for Gemini's requirement
+      const thoughtParts = (m as unknown as Record<string, unknown>).thoughtParts as Array<Record<string, unknown>> | undefined;
+      if (thoughtParts) {
+        for (const tp of thoughtParts) {
+          parts.push(tp);
+        }
+      }
       for (const tc of m.tool_calls) {
         let argsObj: Record<string, unknown> = {};
         try { argsObj = JSON.parse(tc.function.arguments); } catch { /* empty */ }
@@ -2397,7 +2405,7 @@ async function callGeminiStream(
     throw new Error("No response body for streaming");
   }
 
-  // Gemini SSE: each chunk has candidates[].content.parts[] with either text or functionCall
+  // Gemini SSE: each chunk has candidates[].content.parts[] with either text, functionCall, or thought
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -2405,6 +2413,8 @@ async function callGeminiStream(
   let inputTokens = 0;
   let outputTokens = 0;
   const toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
+  // Capture thought parts with signatures for tool call re-submission
+  const thoughtParts: Array<Record<string, unknown>> = [];
 
   try {
     while (true) {
@@ -2435,6 +2445,14 @@ async function callGeminiStream(
               fullContent += part.text;
               onToken(part.text);
             }
+            // Capture thought parts with thought_signature
+            if (part.thought && part.thought_signature) {
+              thoughtParts.push({
+                thought: true,
+                thought_signature: part.thought_signature,
+                text: part.text ?? ""
+              });
+            }
             if (part.functionCall && typeof part.functionCall === "object") {
               const fc = part.functionCall as { name?: string; args?: Record<string, unknown> };
               if (fc.name) {
@@ -2461,13 +2479,13 @@ async function callGeminiStream(
   } catch (err) {
     if (signal?.aborted) {
       const usage = inputTokens > 0 ? { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } : undefined;
-      return { content: fullContent || "[Streaming aborted]", usage, toolCalls: toolCalls.length > 0 ? toolCalls : undefined };
+      return { content: fullContent || "[Streaming aborted]", usage, toolCalls: toolCalls.length > 0 ? toolCalls : undefined, thoughtParts: thoughtParts.length > 0 ? thoughtParts : undefined };
     }
     throw err;
   }
 
   const usage = inputTokens > 0 ? { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } : undefined;
-  return { content: fullContent || (toolCalls.length > 0 ? "" : "[No response from model]"), usage, toolCalls: toolCalls.length > 0 ? toolCalls : undefined };
+  return { content: fullContent || (toolCalls.length > 0 ? "" : "[No response from model]"), usage, toolCalls: toolCalls.length > 0 ? toolCalls : undefined, thoughtParts: thoughtParts.length > 0 ? thoughtParts : undefined };
 }
 
 /** Callback for tool-related SSE events */
@@ -2570,11 +2588,16 @@ async function callAIStream(
         type: "function" as const,
         function: { name: tc.name, arguments: tc.arguments }
       }));
-      chatMessages.push({
+      const assistantMsg: ChatMessage = {
         role: "assistant",
         content: result.content,
         tool_calls: assistantToolCalls
-      });
+      };
+      // Include thoughtParts for Gemini's thought_signature requirement
+      if (result.thoughtParts && result.thoughtParts.length > 0) {
+        (assistantMsg as unknown as Record<string, unknown>).thoughtParts = result.thoughtParts;
+      }
+      chatMessages.push(assistantMsg);
 
       // Execute each tool call and append results
       for (const tc of result.toolCalls) {
