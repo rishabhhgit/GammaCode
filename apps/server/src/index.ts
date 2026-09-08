@@ -2557,6 +2557,8 @@ async function callGeminiStream(
         }
       }
 
+      logger.info(`[ai-stream] Gemini request: history=${history.length} entries, lastMsg role=${lastMsg.role}, content=${lastMsg.content?.slice(0, 100)}...`);
+
       const result = await chat.sendMessageStream(lastParts);
 
       let fullContent = "";
@@ -2601,6 +2603,7 @@ async function callGeminiStream(
       }
 
       const usage = inputTokens > 0 ? { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } : undefined;
+      logger.info(`[ai-stream] Gemini response: content=${fullContent.length} chars, toolCalls=${toolCalls.length}, usage=${JSON.stringify(usage)}`);
       return {
         content: fullContent || (toolCalls.length > 0 ? "" : "[No response from model]"),
         usage,
@@ -3683,8 +3686,10 @@ const server = createServer(async (request, response) => {
       activeAbortControllers.set(session.id, abortController);
 
       // Track tool calls and results to store them in session after completion
-      const pendingToolMessages: Array<{
-        role: "assistant" | "tool";
+      // Batch all tool_call events into ONE assistant message per round (not one per event)
+      const batchedToolCalls: Array<{ id: string; name: string; arguments: string }> = [];
+      const batchedToolResults: Array<{
+        role: "tool";
         content: string;
         extra?: Parameters<typeof attachMessage>[3];
       }> = [];
@@ -3695,21 +3700,15 @@ const server = createServer(async (request, response) => {
       }, fileContext, abortController.signal, (toolEvent) => {
         // Forward tool events to SSE stream
         emitter.emit(toolEvent.type, { messageId, ...toolEvent });
-        // Accumulate tool messages for session persistence
+        // Accumulate tool calls and results for session persistence
         if (toolEvent.type === "tool_call") {
-          pendingToolMessages.push({
-            role: "assistant",
-            content: "",
-            extra: {
-              toolCalls: [{
-                id: toolEvent.toolCallId,
-                name: toolEvent.toolName,
-                arguments: toolEvent.arguments || "{}"
-              }]
-            }
+          batchedToolCalls.push({
+            id: toolEvent.toolCallId,
+            name: toolEvent.toolName,
+            arguments: toolEvent.arguments || "{}"
           });
         } else if (toolEvent.type === "tool_result") {
-          pendingToolMessages.push({
+          batchedToolResults.push({
             role: "tool",
             content: toolEvent.result || "",
             extra: {
@@ -3721,12 +3720,18 @@ const server = createServer(async (request, response) => {
         }
       }, payload.sessionId).then((result) => {
         activeAbortControllers.delete(session.id);
-        // Store intermediate tool messages into the session
-        for (const tm of pendingToolMessages) {
-          attachMessage(session, tm.role, tm.content, tm.extra);
+        // Store ONE assistant message with ALL tool calls (if any)
+        if (batchedToolCalls.length > 0) {
+          attachMessage(session, "assistant", "", {
+            toolCalls: batchedToolCalls.map((tc) => ({ id: tc.id, name: tc.name, arguments: tc.arguments }))
+          });
         }
+        // Store all tool results
+        for (const tr of batchedToolResults) {
+          attachMessage(session, tr.role, tr.content, tr.extra);
+        }
+        // Store final assistant response
         attachMessage(session, "assistant", result.content, {
-          ...(result.toolCalls ? { toolCalls: result.toolCalls.map((tc) => ({ id: tc.id, name: tc.name, arguments: tc.arguments })) } : {}),
           ...(result.fileChanges && result.fileChanges.length > 0 ? { fileChanges: result.fileChanges } : {})
         });
         session.status = "idle";
@@ -3736,9 +3741,14 @@ const server = createServer(async (request, response) => {
         logger.info(`[ai-stream] Session ${session.id} got reply (${result.content.length} chars)${result.usage ? ` [${result.usage.inputTokens}+${result.usage.outputTokens} tokens]` : ""}`);
       }).catch((error) => {
         activeAbortControllers.delete(session.id);
-        // Still store any tool messages that happened before the error
-        for (const tm of pendingToolMessages) {
-          attachMessage(session, tm.role, tm.content, tm.extra);
+        // Still store any tool calls/results that happened before the error
+        if (batchedToolCalls.length > 0) {
+          attachMessage(session, "assistant", "", {
+            toolCalls: batchedToolCalls.map((tc) => ({ id: tc.id, name: tc.name, arguments: tc.arguments }))
+          });
+        }
+        for (const tr of batchedToolResults) {
+          attachMessage(session, tr.role, tr.content, tr.extra);
         }
         const message = error instanceof Error ? error.message : String(error);
         attachMessage(session, "assistant", `[Error] AI call failed: ${message}`);
