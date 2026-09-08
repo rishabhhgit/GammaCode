@@ -1592,8 +1592,91 @@ button.titlebar-chip {
   padding: 6px 10px;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 10px;
+}
+
+.dock-footer-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dock-upload-btn {
+  background: transparent !important;
+  border: 1px solid var(--border-subtle) !important;
+  color: var(--text-weak) !important;
+  padding: 4px 8px !important;
+  border-radius: 6px !important;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.dock-upload-btn:hover {
+  background: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-default) !important;
+}
+
+.dock-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px 0;
+}
+
+.dock-attachment-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  max-width: 200px;
+}
+
+.dock-attachment-thumb {
+  width: 24px;
+  height: 24px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.dock-attachment-icon {
+  color: var(--text-weak);
+  flex-shrink: 0;
+}
+
+.dock-attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.dock-attachment-size {
+  color: var(--text-weaker);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.dock-attachment-remove {
+  background: transparent;
+  border: none;
+  color: var(--text-weaker);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.dock-attachment-remove:hover {
+  color: var(--error);
+  background: var(--bg-hover);
 }
 
 .dock-hints {

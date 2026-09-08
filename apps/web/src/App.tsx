@@ -47,6 +47,8 @@ import {
   X,
   PanelLeft,
   Zap,
+  Paperclip,
+  FileText,
 } from "lucide-react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import {
@@ -563,6 +565,7 @@ export default function App() {
     () => (localStorage.getItem("gc:mode") as "plan" | "build") || "build",
   );
   const [prompt, setPrompt] = useState("");
+  const [attachments, setAttachments] = useState<Array<{ id: string; name: string; mimeType: string; size: number; data: string }>>([]);
   const [terminalRuns, setTerminalRuns] = useState<CommandRun[]>([]);
   const [dockTab, setDockTab] = useState<DockTab>("terminal");
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("chat");
@@ -1972,6 +1975,62 @@ export default function App() {
     }
   }
 
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files;
+    if (!files) return;
+    for (const file of Array.from(files)) {
+      if (file.size > 20 * 1024 * 1024) {
+        alert(`${file.name} is too large (max 20MB)`);
+        continue;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = (reader.result as string).split(",")[1] ?? "";
+        setAttachments((prev) => [
+          ...prev,
+          { id: crypto.randomUUID(), name: file.name, mimeType: file.type, size: file.size, data: base64 }
+        ]);
+      };
+      reader.readAsDataURL(file);
+    }
+    e.target.value = "";
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const files = e.dataTransfer.files;
+    for (const file of Array.from(files)) {
+      if (file.size > 20 * 1024 * 1024) {
+        alert(`${file.name} is too large (max 20MB)`);
+        continue;
+      }
+      if (!file.type.startsWith("image/") && file.type !== "application/pdf") {
+        alert(`${file.name}: only images and PDFs are supported`);
+        continue;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = (reader.result as string).split(",")[1] ?? "";
+        setAttachments((prev) => [
+          ...prev,
+          { id: crypto.randomUUID(), name: file.name, mimeType: file.type, size: file.size, data: base64 }
+        ]);
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+
+  function removeAttachment(id: string) {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  }
+
+  function formatFileSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes}B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  }
+
   async function handleSubmitPrompt(nextPrompt?: string) {
     const content = (nextPrompt ?? prompt).trim();
     if (!content) {
@@ -1981,6 +2040,7 @@ export default function App() {
     setSubmitting(true);
     setError("");
     try {
+      const currentAttachments = attachments.length > 0 ? attachments : undefined;
       if (!activeSessionId) {
         const payload = await fetchJson<
           SessionDetail & { streamMessageId?: string }
@@ -1992,6 +2052,7 @@ export default function App() {
             provider,
             model,
             filePath: activeFile?.path,
+            attachments: currentAttachments,
           }),
         });
         setActiveSessionId(payload.id);
@@ -2019,12 +2080,15 @@ export default function App() {
             provider,
             model,
             filePath: activeFile?.path,
+            attachments: currentAttachments,
           }),
         });
         setSessionDetail(payload);
         // Connect to SSE stream for real-time token delivery
         connectStream(activeSessionId);
       }
+      // Clear attachments after sending
+      setAttachments([]);
 
       setPrompt("");
       await loadWorkspace();
@@ -3047,7 +3111,36 @@ export default function App() {
                         <div
                           className="dock-textarea-wrap"
                           style={{ position: "relative" }}
+                          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                          onDrop={handleDrop}
                         >
+                          {/* Attachment previews */}
+                          {attachments.length > 0 && (
+                            <div className="dock-attachments">
+                              {attachments.map((att) => (
+                                <div key={att.id} className="dock-attachment-chip">
+                                  {att.mimeType.startsWith("image/") ? (
+                                    <img
+                                      src={`data:${att.mimeType};base64,${att.data}`}
+                                      alt={att.name}
+                                      className="dock-attachment-thumb"
+                                    />
+                                  ) : (
+                                    <FileText size={14} className="dock-attachment-icon" />
+                                  )}
+                                  <span className="dock-attachment-name">{att.name}</span>
+                                  <span className="dock-attachment-size">{formatFileSize(att.size)}</span>
+                                  <button
+                                    type="button"
+                                    className="dock-attachment-remove"
+                                    onClick={() => removeAttachment(att.id)}
+                                  >
+                                    <X size={10} />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                           {/* Autocomplete popup */}
                           {autocompleteType &&
                             (() => {
@@ -3282,6 +3375,24 @@ export default function App() {
                           />
                         </div>
                         <div className="dock-footer">
+                          <div className="dock-footer-left">
+                            <input
+                              type="file"
+                              id="file-upload"
+                              multiple
+                              accept="image/*,.pdf"
+                              style={{ display: "none" }}
+                              onChange={handleFileSelect}
+                            />
+                            <button
+                              className="titlebar-action dock-upload-btn"
+                              type="button"
+                              title="Attach image or PDF"
+                              onClick={() => document.getElementById("file-upload")?.click()}
+                            >
+                              <Paperclip size={14} />
+                            </button>
+                          </div>
                           {isStreaming ? (
                             <button
                               className="titlebar-action danger dock-send-btn"

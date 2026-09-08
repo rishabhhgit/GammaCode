@@ -79,6 +79,20 @@ export const sessionSummarySchema = z.object({
   sharedId: z.string().optional()
 });
 
+/* ================================================================
+   Attachment Types
+   ================================================================ */
+
+export const attachmentSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  mimeType: z.string(),
+  size: z.number(),
+  data: z.string() // base64-encoded content
+});
+
+export type Attachment = z.infer<typeof attachmentSchema>;
+
 export const sessionMessageSchema = z.object({
   id: z.string(),
   role: z.enum(["user", "assistant", "system", "tool"]),
@@ -91,7 +105,9 @@ export const sessionMessageSchema = z.object({
   toolName: z.string().optional(),
   isError: z.boolean().optional(),
   // File changes made by tool calls in this response round (stored on final assistant message)
-  fileChanges: z.array(fileChangeSchema).optional()
+  fileChanges: z.array(fileChangeSchema).optional(),
+  // Attachments (images, PDFs) sent with user messages
+  attachments: z.array(attachmentSchema).optional()
 });
 
 export const commandRunSchema = z.object({
@@ -214,7 +230,8 @@ export const createSessionSchema = z.object({
   prompt: z.string().min(1),
   provider: z.string(),
   model: z.string(),
-  filePath: z.string().optional()
+  filePath: z.string().optional(),
+  attachments: z.array(attachmentSchema).optional()
 });
 
 export const appendMessageSchema = z.object({
@@ -222,7 +239,8 @@ export const appendMessageSchema = z.object({
   prompt: z.string().min(1),
   provider: z.string(),
   model: z.string(),
-  filePath: z.string().optional()
+  filePath: z.string().optional(),
+  attachments: z.array(attachmentSchema).optional()
 });
 
 export const createCommandRunSchema = z.object({

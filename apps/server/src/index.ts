@@ -1447,6 +1447,8 @@ interface ChatMessage {
   // Present on tool result messages (role === "tool")
   tool_call_id?: string;
   name?: string;                   // tool name for tool-result messages
+  // Attachments (images, PDFs) for multimodal AI
+  attachments?: Array<{ id: string; name: string; mimeType: string; size: number; data: string }>;
 }
 
 async function callAI(
@@ -1822,7 +1824,29 @@ async function callOpenAICompatibleStream(
   const body = JSON.stringify({
     model,
     messages: messages.map((m) => {
-      const msg: Record<string, unknown> = { role: m.role, content: m.content };
+      // Build content — string for text-only, array for multimodal
+      let content: string | Array<Record<string, unknown>>;
+      if (m.attachments && m.attachments.length > 0) {
+        const contentParts: Array<Record<string, unknown>> = [];
+        if (m.content) contentParts.push({ type: "text", text: m.content });
+        for (const att of m.attachments) {
+          if (att.mimeType.startsWith("image/")) {
+            contentParts.push({
+              type: "image_url",
+              image_url: { url: `data:${att.mimeType};base64,${att.data}` }
+            });
+          } else if (att.mimeType === "application/pdf") {
+            contentParts.push({
+              type: "image_url",
+              image_url: { url: `data:${att.mimeType};base64,${att.data}` }
+            });
+          }
+        }
+        content = contentParts;
+      } else {
+        content = m.content;
+      }
+      const msg: Record<string, unknown> = { role: m.role, content };
       if (m.tool_calls) msg.tool_calls = m.tool_calls;
       if (m.tool_call_id) { msg.tool_call_id = m.tool_call_id; msg.name = m.name; }
       return msg;
@@ -2125,7 +2149,27 @@ async function callAnthropicStream(
       // Tool result — Anthropic uses tool_result content blocks in a "user" message
       chatMessages.push({ role: "user", content: [{ type: "tool_result", tool_use_id: m.tool_call_id, content: m.content }] });
     } else {
-      chatMessages.push({ role: m.role as "user" | "assistant", content: m.content });
+      // User or system message — handle multimodal content
+      if (m.attachments && m.attachments.length > 0) {
+        const contentParts: Array<Record<string, unknown>> = [];
+        if (m.content) contentParts.push({ type: "text", text: m.content });
+        for (const att of m.attachments) {
+          if (att.mimeType.startsWith("image/")) {
+            contentParts.push({
+              type: "image",
+              source: { type: "base64", media_type: att.mimeType, data: att.data }
+            });
+          } else if (att.mimeType === "application/pdf") {
+            contentParts.push({
+              type: "document",
+              source: { type: "base64", media_type: "application/pdf", data: att.data }
+            });
+          }
+        }
+        chatMessages.push({ role: m.role as "user" | "assistant", content: contentParts });
+      } else {
+        chatMessages.push({ role: m.role as "user" | "assistant", content: m.content });
+      }
     }
   }
 
@@ -2291,9 +2335,22 @@ async function callGeminiStream(
         parts: [{ functionResponse: { name: m.name ?? "unknown", response: resultObj } }]
       });
     } else {
+      const parts: Array<Record<string, unknown>> = [];
+      if (m.content) parts.push({ text: m.content });
+      // Add attachments as inline_data parts
+      if (m.attachments) {
+        for (const att of m.attachments) {
+          parts.push({
+            inline_data: {
+              mime_type: att.mimeType,
+              data: att.data
+            }
+          });
+        }
+      }
       contents.push({
         role: m.role === "assistant" ? "model" : "user",
-        parts: [{ text: m.content }]
+        parts
       });
     }
   }
@@ -2661,6 +2718,7 @@ function attachMessage(
     toolName?: string;
     isError?: boolean;
     fileChanges?: FileChange[];
+    attachments?: Array<{ id: string; name: string; mimeType: string; size: number; data: string }>;
   }
 ) {
   session.messages.push({
@@ -2672,7 +2730,8 @@ function attachMessage(
     ...(extra?.toolCallId ? { toolCallId: extra.toolCallId } : {}),
     ...(extra?.toolName ? { toolName: extra.toolName } : {}),
     ...(extra?.isError !== undefined ? { isError: extra.isError } : {}),
-    ...(extra?.fileChanges ? { fileChanges: extra.fileChanges } : {})
+    ...(extra?.fileChanges ? { fileChanges: extra.fileChanges } : {}),
+    ...(extra?.attachments ? { attachments: extra.attachments } : {})
   });
   session.updatedAt = new Date().toISOString();
 }
@@ -3426,7 +3485,7 @@ const server = createServer(async (request, response) => {
       session.model = payload.model;
       session.activeFilePath = payload.filePath;
       session.status = "running";
-      attachMessage(session, "user", payload.prompt);
+      attachMessage(session, "user", payload.prompt, payload.attachments ? { attachments: payload.attachments } : undefined);
       sessionStore.set(session.id, { ...session });
       persistSessions();
 
@@ -3435,6 +3494,9 @@ const server = createServer(async (request, response) => {
         .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "tool")
         .map((m) => {
           const msg: ChatMessage = { role: m.role as "user" | "assistant" | "tool", content: m.content };
+          if (m.role === "user" && m.attachments && m.attachments.length > 0) {
+            msg.attachments = m.attachments;
+          }
           if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
             msg.tool_calls = m.toolCalls.map((tc) => ({
               id: tc.id,
