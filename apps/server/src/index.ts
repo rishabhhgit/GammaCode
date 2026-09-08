@@ -631,10 +631,10 @@ const providerConfigs: ProviderConfig[] = [
     baseUrl: "https://openrouter.ai/api/v1",
     defaultModel: "openai/gpt-4o",
     fallbackModels: [
-      "openai/gpt-4o", "openai/gpt-4.1", "anthropic/claude-sonnet-4-20250514",
-      "anthropic/claude-opus-4-20250514", "google/gemini-2.5-pro-preview",
-      "google/gemini-2.5-flash-preview", "deepseek/deepseek-chat",
-      "deepseek/deepseek-reasoner", "meta-llama/llama-4-maverick"
+      "openai/gpt-4o", "openai/gpt-4o-mini",
+      "anthropic/claude-sonnet-4-20250514",
+      "google/gemini-2.5-flash-preview",
+      "deepseek/deepseek-chat"
     ],
     format: "openai"
   },
@@ -1040,11 +1040,18 @@ async function fetchModelsForProvider(config: ProviderConfig): Promise<string[]>
       models = (data.data ?? [])
         .map((m) => m.id)
         .filter((id) => {
-          // Include major providers' models
-          const prefixes = ["openai/", "anthropic/", "google/", "deepseek/", "meta-llama/", "mistralai/", "cohere/"];
-          return prefixes.some((p) => id.startsWith(p));
-        })
-        .slice(0, 50); // Cap at 50 to keep the dropdown manageable
+          // Include only top popular models from major providers
+          const popular = [
+            "openai/gpt-4o", "openai/gpt-4o-mini", "openai/gpt-4.1", "openai/gpt-4.1-mini",
+            "anthropic/claude-sonnet-4-20250514", "anthropic/claude-opus-4-20250514",
+            "anthropic/claude-3.5-sonnet", "anthropic/claude-3.5-haiku",
+            "google/gemini-2.5-pro-preview", "google/gemini-2.5-flash-preview",
+            "deepseek/deepseek-chat", "deepseek/deepseek-reasoner",
+            "meta-llama/llama-4-maverick", "mistralai/mistral-large-latest",
+            "cohere/command-r-plus"
+          ];
+          return popular.includes(id);
+        });
     } else if (config.format === "gemini") {
       const res = await fetch(`${config.baseUrl}/models?key=${apiKey}`);
       if (!res.ok) throw new Error(`Gemini /models returned ${res.status}`);
@@ -1121,13 +1128,17 @@ function getAgentSystemPrompt(agentId: string): string | null {
   return agent.systemPrompt;
 }
 
-/** Build a compact file tree string for AI context (max ~200 entries) */
+/** Build a compact file tree string for AI context (max ~100 entries) */
 async function getWorkspaceFileTree(): Promise<string> {
   try {
     const files = await collectFiles(workspaceRoot);
-    const paths = files.map((f) => f.path).slice(0, 200);
-    if (paths.length === 0) return "";
-    return `\nWorkspace file tree (${paths.length} files):\n${paths.join("\n")}`;
+    // Only include source files, not node_modules, dist, etc.
+    const sourceFiles = files
+      .filter((f) => !f.path.includes("node_modules") && !f.path.includes("dist") && !f.path.includes(".git"))
+      .map((f) => f.path)
+      .slice(0, 100);
+    if (sourceFiles.length === 0) return "";
+    return `\nWorkspace file tree (${sourceFiles.length} files):\n${sourceFiles.join("\n")}`;
   } catch {
     return "";
   }
@@ -1524,7 +1535,7 @@ async function callOpenAICompatible(
   const body = JSON.stringify({
     model,
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    max_tokens: 16384,
+    max_tokens: 8192,
     temperature: 0.3
   });
 
@@ -1567,7 +1578,7 @@ async function callCopilot(
   const body = JSON.stringify({
     model,
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    max_tokens: 16384,
+    max_tokens: 8192,
     temperature: 0.3
   });
 
@@ -1612,7 +1623,7 @@ async function callAnthropic(
 
   const body = JSON.stringify({
     model,
-    max_tokens: 16384,
+    max_tokens: 8192,
     system: systemMessage?.content ?? getSystemPrompt(),
     messages: chatMessages
   });
@@ -1851,8 +1862,8 @@ async function callOpenAICompatibleStream(
       if (m.tool_call_id) { msg.tool_call_id = m.tool_call_id; msg.name = m.name; }
       return msg;
     }),
-    max_tokens: 16384,
-    temperature: 0.3,
+    max_tokens: 8192,
+    temperature: 0.2,
     stream: true,
     stream_options: { include_usage: true },
     tools: buildAiToolsOpenAI(),
@@ -2054,7 +2065,7 @@ async function callCopilotStream(
         if (m.tool_call_id) { msg.tool_call_id = m.tool_call_id; msg.name = m.name; }
         return msg;
       }),
-      max_tokens: 16384,
+      max_tokens: 8192,
       stream: true,
       stream_options: { include_usage: true },
       tools: buildAiToolsOpenAI(),
@@ -2179,7 +2190,7 @@ async function callAnthropicStream(
 
   const body = JSON.stringify({
     model,
-    max_tokens: 16384,
+    max_tokens: 8192,
     system: systemMessage?.content ?? getSystemPrompt(),
     messages: chatMessages,
     stream: true,
