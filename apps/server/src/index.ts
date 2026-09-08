@@ -1846,7 +1846,7 @@ async function callGemini(
   const systemMessage = messages.find((m) => m.role === "system");
   const chatMessages = messages.filter((m) => m.role !== "system");
 
-  // Build SDK-compatible history — matches opencode's convertMessages
+  // Build SDK-compatible history — batch tool results into single user messages
   const history: Content[] = [];
   for (let i = 0; i < chatMessages.length - 1; i++) {
     const m = chatMessages[i];
@@ -1861,12 +1861,18 @@ async function callGemini(
       }
       history.push({ role: "model", parts });
     } else if (m.role === "tool") {
-      let resultObj: unknown;
-      try { resultObj = JSON.parse(m.content); } catch { resultObj = { result: m.content }; }
-      history.push({
-        role: "function",
-        parts: [{ functionResponse: { name: m.name ?? "unknown", response: resultObj as Record<string, unknown> } }]
-      });
+      const funcParts: Part[] = [];
+      while (i < chatMessages.length && chatMessages[i].role === "tool") {
+        const toolMsg = chatMessages[i];
+        let resultObj: unknown;
+        try { resultObj = JSON.parse(toolMsg.content); } catch { resultObj = { result: toolMsg.content }; }
+        funcParts.push({ functionResponse: { name: toolMsg.name ?? "unknown", response: resultObj as Record<string, unknown> } });
+        i++;
+      }
+      i--;
+      if (funcParts.length > 0) {
+        history.push({ role: "user", parts: funcParts });
+      }
     } else {
       history.push({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] });
     }
@@ -2516,13 +2522,14 @@ async function callGeminiStream(
   const systemMessage = messages.find((m) => m.role === "system");
   const chatMessages = messages.filter((m) => m.role !== "system");
 
-  // Build SDK-compatible history — matches opencode's convertMessages exactly
+  // Build SDK-compatible history
+  // CRITICAL: Gemini requires alternating user/model roles.
+  // Tool results (function responses) must be batched into ONE user message per round.
   const history: Content[] = [];
   for (let i = 0; i < chatMessages.length - 1; i++) {
     const m = chatMessages[i];
 
     if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
-      // Model message with function calls
       const parts: Part[] = [];
       if (m.content) parts.push({ text: m.content });
       for (const tc of m.tool_calls) {
@@ -2532,14 +2539,19 @@ async function callGeminiStream(
       }
       history.push({ role: "model", parts });
     } else if (m.role === "tool") {
-      // Tool results — EACH result is a separate Content with role "function"
-      // This is how opencode does it (not batched into one user message)
-      let resultObj: unknown;
-      try { resultObj = JSON.parse(m.content); } catch { resultObj = { result: m.content }; }
-      history.push({
-        role: "function",
-        parts: [{ functionResponse: { name: m.name ?? "unknown", response: resultObj as Record<string, unknown> } }]
-      });
+      // Collect ALL consecutive tool results into ONE user message with functionResponse parts
+      const funcParts: Part[] = [];
+      while (i < chatMessages.length && chatMessages[i].role === "tool") {
+        const toolMsg = chatMessages[i];
+        let resultObj: unknown;
+        try { resultObj = JSON.parse(toolMsg.content); } catch { resultObj = { result: toolMsg.content }; }
+        funcParts.push({ functionResponse: { name: toolMsg.name ?? "unknown", response: resultObj as Record<string, unknown> } });
+        i++;
+      }
+      i--; // for loop will increment again
+      if (funcParts.length > 0) {
+        history.push({ role: "user", parts: funcParts });
+      }
     } else {
       const parts: Part[] = [];
       if (m.content) parts.push({ text: m.content });
@@ -3597,8 +3609,9 @@ const server = createServer(async (request, response) => {
       activeAbortControllers.set(id, abortController);
 
       // Track tool calls and results to store them in session after completion
-      const pendingToolMessages: Array<{
-        role: "assistant" | "tool";
+      const batchedToolCalls: Array<{ id: string; name: string; arguments: string }> = [];
+      const batchedToolResults: Array<{
+        role: "tool";
         content: string;
         extra?: Parameters<typeof attachMessage>[3];
       }> = [];
@@ -3608,22 +3621,14 @@ const server = createServer(async (request, response) => {
       }, fileContext, abortController.signal, (toolEvent) => {
         // Forward tool events to SSE stream
         emitter.emit(toolEvent.type, { messageId, ...toolEvent });
-        // Accumulate tool messages for session persistence
         if (toolEvent.type === "tool_call") {
-          // Store the assistant message that requested this tool call
-          pendingToolMessages.push({
-            role: "assistant",
-            content: "",
-            extra: {
-              toolCalls: [{
-                id: toolEvent.toolCallId,
-                name: toolEvent.toolName,
-                arguments: toolEvent.arguments || "{}"
-              }]
-            }
+          batchedToolCalls.push({
+            id: toolEvent.toolCallId,
+            name: toolEvent.toolName,
+            arguments: toolEvent.arguments || "{}"
           });
         } else if (toolEvent.type === "tool_result") {
-          pendingToolMessages.push({
+          batchedToolResults.push({
             role: "tool",
             content: toolEvent.result || "",
             extra: {
@@ -3635,12 +3640,15 @@ const server = createServer(async (request, response) => {
         }
       }, id).then((result) => {
         activeAbortControllers.delete(id);
-        // Store intermediate tool messages into the session
-        for (const tm of pendingToolMessages) {
-          attachMessage(session, tm.role, tm.content, tm.extra);
+        if (batchedToolCalls.length > 0) {
+          attachMessage(session, "assistant", "", {
+            toolCalls: batchedToolCalls.map((tc) => ({ id: tc.id, name: tc.name, arguments: tc.arguments }))
+          });
+        }
+        for (const tr of batchedToolResults) {
+          attachMessage(session, tr.role, tr.content, tr.extra);
         }
         attachMessage(session, "assistant", result.content, {
-          ...(result.toolCalls ? { toolCalls: result.toolCalls.map((tc) => ({ id: tc.id, name: tc.name, arguments: tc.arguments })) } : {}),
           ...(result.fileChanges && result.fileChanges.length > 0 ? { fileChanges: result.fileChanges } : {})
         });
         session.status = "idle";
@@ -3650,9 +3658,13 @@ const server = createServer(async (request, response) => {
         logger.info(`[ai-stream] Session ${id} got reply (${result.content.length} chars)${result.usage ? ` [${result.usage.inputTokens}+${result.usage.outputTokens} tokens]` : ""}`);
       }).catch((error) => {
         activeAbortControllers.delete(id);
-        // Still store any tool messages that happened before the error
-        for (const tm of pendingToolMessages) {
-          attachMessage(session, tm.role, tm.content, tm.extra);
+        if (batchedToolCalls.length > 0) {
+          attachMessage(session, "assistant", "", {
+            toolCalls: batchedToolCalls.map((tc) => ({ id: tc.id, name: tc.name, arguments: tc.arguments }))
+          });
+        }
+        for (const tr of batchedToolResults) {
+          attachMessage(session, tr.role, tr.content, tr.extra);
         }
         const message = error instanceof Error ? error.message : String(error);
         attachMessage(session, "assistant", `[Error] AI call failed: ${message}`);
