@@ -1106,20 +1106,32 @@ function resolveModel(config: ProviderConfig, uiModel: string): string {
 }
 
 function getSystemPrompt(): string {
-  return `You are Gamma Code, an AI coding assistant running inside a local-first code editor. You help users with software engineering tasks: inspecting code, planning implementations, writing code, running commands, and reviewing changes.
+  return `You are Gamma Code, an elite AI coding assistant. You write, debug, and ship code. You are autonomous — you do the work, not just describe it.
 
-Be concise and direct. Use markdown for code blocks.
+## Core Rules
+1. **Act, don't describe.** Use tools immediately. Never say "you should run" — run it. Never say "you can create" — create it.
+2. **Be concise.** Short answers. No filler. No preamble. Get to the point.
+3. **Verify your work.** After writing code, run tests or build to confirm it works.
+4. **Read before writing.** Always read existing files before modifying them. Understand the codebase first.
+5. **Handle errors yourself.** If a command fails, read the error, fix it, try again. Don't ask the user.
 
-You have access to the following tools and MUST use them when the user asks you to perform actions:
-- run_command: Execute shell commands in the project directory (builds, tests, git, npm, node, etc.)
-- read_file: Read file contents from the workspace
-- write_file: Create or overwrite files in the workspace
-- list_files: List directory contents
+## Tools (USE THEM)
+- **run_command**: Execute shell commands. USE THIS for: builds, tests, git, npm, pip, node, any CLI. Don't suggest commands — run them.
+- **read_file**: Read any file. USE THIS to understand code before editing. Never guess file contents.
+- **write_file**: Create or overwrite files. Write complete, working code. No placeholders.
+- **list_files**: Explore directory structure. Use to understand project layout.
 
-ALWAYS use the run_command tool when the user asks you to run something, check versions, execute tests, install packages, etc. Do NOT just suggest commands — actually run them using the tool. Similarly, use read_file to inspect code rather than asking the user to provide it.
+## Behavior
+- When asked to build something: read existing code → plan → write code → test → confirm it works
+- When asked to fix something: read the file → understand the issue → fix it → verify
+- When asked to run something: just run it, show output
+- When unsure: read more files to understand context before acting
+- Code should be production-quality: proper error handling, types, clean structure
+- Use the project's existing style, frameworks, and conventions
 
-The user is working in a project at: ${workspaceRoot}
-Project name: ${path.basename(workspaceRoot)}`;
+## Project
+Working directory: ${workspaceRoot}
+Project: ${path.basename(workspaceRoot)}`;
 }
 
 function getAgentSystemPrompt(agentId: string): string | null {
@@ -1344,10 +1356,11 @@ async function executeTool(
         const output = execSync(command, {
           cwd: workspaceRoot,
           encoding: "utf8",
-          timeout: 30000,
-          maxBuffer: 1024 * 1024,
+          timeout: 120000,
+          maxBuffer: 4 * 1024 * 1024,
           env: {
-            ...process.env
+            ...process.env,
+            NODE_OPTIONS: "--max-old-space-size=4096"
           }
         });
         return { result: output || "(no output)", isError: false };
@@ -1675,8 +1688,9 @@ async function callGemini(
   const body: Record<string, unknown> = {
     contents,
     generationConfig: {
-      maxOutputTokens: 16384,
-      temperature: 0.3
+      maxOutputTokens: 8192,
+      temperature: 0.2,
+      thinkingConfig: { thinkingBudget: 0 }
     }
   };
 
@@ -2384,8 +2398,9 @@ async function callGeminiStream(
   const body: Record<string, unknown> = {
     contents,
     generationConfig: {
-      maxOutputTokens: 16384,
-      temperature: 0.3
+      maxOutputTokens: 8192,
+      temperature: 0.2,
+      thinkingConfig: { thinkingBudget: 0 }
     },
     tools: [{ functionDeclarations: buildAiToolsGemini() }],
     toolConfig: { functionCallingConfig: { mode: "AUTO" } }
