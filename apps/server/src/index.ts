@@ -2486,8 +2486,10 @@ async function callGeminiStream(
   const chatMessages = messages.filter((m) => m.role !== "system");
 
   // Build contents — handle tool results as user messages with functionResponse parts
+  // IMPORTANT: All consecutive tool results must be batched into a single user message
   const contents: Array<{ role: string; parts: Array<Record<string, unknown>> }> = [];
-  for (const m of chatMessages) {
+  for (let i = 0; i < chatMessages.length; i++) {
+    const m = chatMessages[i];
     if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
       // Use raw model parts if available (preserves thought_signature exactly as received)
       const rawParts = (m as unknown as Record<string, unknown>).rawModelParts as Array<Record<string, unknown>> | undefined;
@@ -2505,13 +2507,19 @@ async function callGeminiStream(
         contents.push({ role: "model", parts });
       }
     } else if (m.role === "tool") {
-      // Tool result → user message with functionResponse part
-      let resultObj: unknown;
-      try { resultObj = JSON.parse(m.content); } catch { resultObj = { result: m.content }; }
-      contents.push({
-        role: "user",
-        parts: [{ functionResponse: { name: m.name ?? "unknown", response: resultObj } }]
-      });
+      // Batch all consecutive tool results into a single user message
+      const toolParts: Array<Record<string, unknown>> = [];
+      while (i < chatMessages.length && chatMessages[i].role === "tool") {
+        const toolMsg = chatMessages[i];
+        let resultObj: unknown;
+        try { resultObj = JSON.parse(toolMsg.content); } catch { resultObj = { result: toolMsg.content }; }
+        toolParts.push({ functionResponse: { name: toolMsg.name ?? "unknown", response: resultObj } });
+        i++;
+      }
+      i--; // The for loop will increment i again
+      if (toolParts.length > 0) {
+        contents.push({ role: "user", parts: toolParts });
+      }
     } else {
       const parts: Array<Record<string, unknown>> = [];
       if (m.content) parts.push({ text: m.content });
