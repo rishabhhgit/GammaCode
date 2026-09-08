@@ -1043,7 +1043,7 @@ async function fetchModelsForProvider(config: ProviderConfig): Promise<string[]>
       const data = (await res.json()) as { models?: Array<{ name: string }> };
       models = (data.models ?? [])
         .map((m) => m.name.replace("models/", ""))
-        .filter((id) => id.includes("gemini"))
+        .filter((id) => id.includes("gemini") && !id.includes(":batch"))
         .sort();
     }
 
