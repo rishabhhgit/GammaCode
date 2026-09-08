@@ -2332,17 +2332,24 @@ async function callGeminiStream(
       // Assistant message with tool calls → model message with functionCall parts
       const parts: Array<Record<string, unknown>> = [];
       if (m.content) parts.push({ text: m.content });
-      // Include thought parts with signatures for Gemini's requirement
-      const thoughtParts = (m as unknown as Record<string, unknown>).thoughtParts as Array<Record<string, unknown>> | undefined;
-      if (thoughtParts) {
-        for (const tp of thoughtParts) {
-          parts.push(tp);
-        }
-      }
+      // Include thoughtParts for Gemini's thought_signature requirement
+      const tParts = (m as unknown as Record<string, unknown>).thoughtParts as Array<Record<string, unknown>> | undefined;
       for (const tc of m.tool_calls) {
         let argsObj: Record<string, unknown> = {};
         try { argsObj = JSON.parse(tc.function.arguments); } catch { /* empty */ }
-        parts.push({ functionCall: { name: tc.function.name, args: argsObj } });
+        const fcPart: Record<string, unknown> = { functionCall: { name: tc.function.name, args: argsObj } };
+        // Attach thought_signature if available — match by name or use any signature
+        if (tParts && tParts.length > 0) {
+          const match = tParts.find((tp) => {
+            const tpFc = tp.functionCall as { name?: string } | undefined;
+            return tpFc?.name === tc.function.name;
+          });
+          const sig = match?.thought_signature ?? tParts[0]?.thought_signature;
+          if (sig) {
+            fcPart.thought_signature = sig;
+          }
+        }
+        parts.push(fcPart);
       }
       contents.push({ role: "model", parts });
     } else if (m.role === "tool") {
@@ -2413,8 +2420,9 @@ async function callGeminiStream(
   let inputTokens = 0;
   let outputTokens = 0;
   const toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
-  // Capture thought parts with signatures for tool call re-submission
+  // Capture thought signatures for Gemini's thought_signature requirement
   const thoughtParts: Array<Record<string, unknown>> = [];
+  let lastThoughtSignature = "";
 
   try {
     while (true) {
@@ -2441,17 +2449,13 @@ async function callGeminiStream(
           const parts = candidates?.[0]?.content?.parts ?? [];
 
           for (const part of parts) {
-            if (typeof part.text === "string" && part.text) {
+            if (typeof part.text === "string" && part.text && !part.thought) {
               fullContent += part.text;
               onToken(part.text);
             }
-            // Capture thought parts with thought_signature
-            if (part.thought && part.thought_signature) {
-              thoughtParts.push({
-                thought: true,
-                thought_signature: part.thought_signature,
-                text: part.text ?? ""
-              });
+            // Capture thought_signature — can be on thought parts or functionCall parts
+            if (part.thought_signature) {
+              lastThoughtSignature = part.thought_signature as string;
             }
             if (part.functionCall && typeof part.functionCall === "object") {
               const fc = part.functionCall as { name?: string; args?: Record<string, unknown> };
@@ -2461,6 +2465,14 @@ async function callGeminiStream(
                   name: fc.name,
                   arguments: JSON.stringify(fc.args ?? {})
                 });
+                // Attach thought_signature to this tool call
+                const sig = (part.thought_signature as string) || lastThoughtSignature;
+                if (sig) {
+                  thoughtParts.push({
+                    functionCall: fc,
+                    thought_signature: sig
+                  });
+                }
               }
             }
           }
