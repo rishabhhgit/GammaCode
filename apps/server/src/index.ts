@@ -1887,7 +1887,7 @@ interface StreamResult {
   usage?: UsageData;
   toolCalls?: Array<{ id: string; name: string; arguments: string }>;
   fileChanges?: FileChange[];
-  rawModelParts?: Array<Record<string, unknown>>;
+  toolSignatures?: Record<string, string>;
 }
 
 /** Parse SSE lines from a readable stream, calling onToken for each content delta.
@@ -2492,20 +2492,21 @@ async function callGeminiStream(
     const m = chatMessages[i];
     if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
       // Use raw model parts if available (preserves thought_signature exactly as received)
-      const rawParts = (m as unknown as Record<string, unknown>).rawModelParts as Array<Record<string, unknown>> | undefined;
-      if (rawParts && rawParts.length > 0) {
-        contents.push({ role: "model", parts: rawParts });
-      } else {
-        // Fallback: reconstruct parts (may fail for Gemini 3+ models that require thought_signature)
-        const parts: Array<Record<string, unknown>> = [];
-        if (m.content) parts.push({ text: m.content });
-        for (const tc of m.tool_calls) {
-          let argsObj: Record<string, unknown> = {};
-          try { argsObj = JSON.parse(tc.function.arguments); } catch { /* empty */ }
-          parts.push({ functionCall: { name: tc.function.name, args: argsObj } });
+      const toolSignatures = (m as unknown as Record<string, unknown>).toolSignatures as Record<string, string> | undefined;
+      const parts: Array<Record<string, unknown>> = [];
+      if (m.content) parts.push({ text: m.content });
+      for (const tc of m.tool_calls) {
+        let argsObj: Record<string, unknown> = {};
+        try { argsObj = JSON.parse(tc.function.arguments); } catch { /* empty */ }
+        const fcPart: Record<string, unknown> = { functionCall: { name: tc.function.name, args: argsObj } };
+        // Attach thought_signature if available
+        const sig = toolSignatures?.[tc.id];
+        if (sig) {
+          fcPart.thought_signature = sig;
         }
-        contents.push({ role: "model", parts });
+        parts.push(fcPart);
       }
+      contents.push({ role: "model", parts });
     } else if (m.role === "tool") {
       // Batch all consecutive tool results into a single user message
       const toolParts: Array<Record<string, unknown>> = [];
@@ -2599,8 +2600,9 @@ async function callGeminiStream(
   let inputTokens = 0;
   let outputTokens = 0;
   const toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
-  // Store raw model parts for exact replay (required for Gemini thought_signature)
-  const rawModelParts: Array<Record<string, unknown>> = [];
+  // Store thought_signature per tool call ID (required for Gemini 3.x)
+  const toolSignatures: Record<string, string> = {};
+  let lastThoughtSignature = "";
 
   try {
     while (true) {
@@ -2627,8 +2629,10 @@ async function callGeminiStream(
           const parts = candidates?.[0]?.content?.parts ?? [];
 
           for (const part of parts) {
-            // Store raw part for exact replay (preserves thought_signature)
-            rawModelParts.push(part);
+            // Capture thought_signature from thought parts or functionCall parts
+            if (part.thought_signature) {
+              lastThoughtSignature = part.thought_signature as string;
+            }
             if (typeof part.text === "string" && part.text && !part.thought) {
               fullContent += part.text;
               onToken(part.text);
@@ -2636,11 +2640,17 @@ async function callGeminiStream(
             if (part.functionCall && typeof part.functionCall === "object") {
               const fc = part.functionCall as { name?: string; args?: Record<string, unknown> };
               if (fc.name) {
+                const toolId = `tool_${toolCalls.length}`;
                 toolCalls.push({
-                  id: `tool_${toolCalls.length}`,
+                  id: toolId,
                   name: fc.name,
                   arguments: JSON.stringify(fc.args ?? {})
                 });
+                // Attach thought_signature to this tool call
+                const sig = (part.thought_signature as string) || lastThoughtSignature;
+                if (sig) {
+                  toolSignatures[toolId] = sig;
+                }
               }
             }
           }
@@ -2659,13 +2669,13 @@ async function callGeminiStream(
   } catch (err) {
     if (signal?.aborted) {
       const usage = inputTokens > 0 ? { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } : undefined;
-      return { content: fullContent || "[Streaming aborted]", usage, toolCalls: toolCalls.length > 0 ? toolCalls : undefined, rawModelParts: rawModelParts.length > 0 ? rawModelParts : undefined };
+      return { content: fullContent || "[Streaming aborted]", usage, toolCalls: toolCalls.length > 0 ? toolCalls : undefined, toolSignatures: Object.keys(toolSignatures).length > 0 ? toolSignatures : undefined };
     }
     throw err;
   }
 
   const usage = inputTokens > 0 ? { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } : undefined;
-  return { content: fullContent || (toolCalls.length > 0 ? "" : "[No response from model]"), usage, toolCalls: toolCalls.length > 0 ? toolCalls : undefined, rawModelParts: rawModelParts.length > 0 ? rawModelParts : undefined };
+  return { content: fullContent || (toolCalls.length > 0 ? "" : "[No response from model]"), usage, toolCalls: toolCalls.length > 0 ? toolCalls : undefined, toolSignatures: Object.keys(toolSignatures).length > 0 ? toolSignatures : undefined };
 }
 
 /** Callback for tool-related SSE events */
@@ -2773,9 +2783,9 @@ async function callAIStream(
         content: result.content,
         tool_calls: assistantToolCalls
       };
-      // Include rawModelParts for Gemini's thought_signature requirement (replay exactly as received)
-      if (result.rawModelParts && result.rawModelParts.length > 0) {
-        (assistantMsg as unknown as Record<string, unknown>).rawModelParts = result.rawModelParts;
+      // Include toolSignatures for Gemini's thought_signature requirement
+      if (result.toolSignatures) {
+        (assistantMsg as unknown as Record<string, unknown>).toolSignatures = result.toolSignatures;
       }
       chatMessages.push(assistantMsg);
 
