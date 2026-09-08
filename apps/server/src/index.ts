@@ -2563,39 +2563,37 @@ async function callGeminiStream(
       let inputTokens = 0;
       let outputTokens = 0;
       const toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
-      const seenToolCalls = new Set<string>(); // Dedup like opencode
+      const seenToolCalls = new Set<string>();
 
       for await (const chunk of result.stream) {
         if (signal?.aborted) break;
 
-        const candidates = (chunk as unknown as Record<string, unknown>).candidates as Array<{ content?: { parts?: Array<Record<string, unknown>> } }> | undefined;
-        const parts = candidates?.[0]?.content?.parts ?? [];
+        // Use SDK helper methods — they handle thought filtering internally
+        const text = chunk.text();
+        if (text) {
+          fullContent += text;
+          onToken(text);
+        }
 
-        for (const part of parts) {
-          if (typeof part.text === "string" && part.text && !part.thought) {
-            fullContent += part.text;
-            onToken(part.text);
-          }
-          if (part.functionCall && typeof part.functionCall === "object") {
-            const fc = part.functionCall as { name?: string; args?: Record<string, unknown> };
-            if (fc.name) {
-              const argsStr = JSON.stringify(fc.args ?? {});
-              // Deduplicate like opencode (Gemini can emit duplicate FunctionCall parts)
-              const dedupKey = `${fc.name}:${argsStr}`;
-              if (!seenToolCalls.has(dedupKey)) {
-                seenToolCalls.add(dedupKey);
-                toolCalls.push({
-                  id: `tool_${toolCalls.length}`,
-                  name: fc.name,
-                  arguments: argsStr
-                });
-              }
+        const fcalls = chunk.functionCalls();
+        if (fcalls) {
+          for (const fc of fcalls) {
+            const argsStr = JSON.stringify(fc.args ?? {});
+            const dedupKey = `${fc.name}:${argsStr}`;
+            if (!seenToolCalls.has(dedupKey)) {
+              seenToolCalls.add(dedupKey);
+              toolCalls.push({
+                id: `tool_${toolCalls.length}`,
+                name: fc.name,
+                arguments: argsStr
+              });
             }
           }
         }
 
         // Extract usage from final chunk
-        const usageMeta = (chunk as unknown as Record<string, unknown>).usageMetadata as { promptTokenCount?: number; candidatesTokenCount?: number } | undefined;
+        const raw = chunk as unknown as Record<string, unknown>;
+        const usageMeta = raw.usageMetadata as { promptTokenCount?: number; candidatesTokenCount?: number } | undefined;
         if (usageMeta?.promptTokenCount) {
           inputTokens = usageMeta.promptTokenCount;
           outputTokens = usageMeta.candidatesTokenCount ?? 0;
