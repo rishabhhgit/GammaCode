@@ -1872,7 +1872,7 @@ interface StreamResult {
   usage?: UsageData;
   toolCalls?: Array<{ id: string; name: string; arguments: string }>;
   fileChanges?: FileChange[];
-  thoughtParts?: Array<Record<string, unknown>>;
+  rawModelParts?: Array<Record<string, unknown>>;
 }
 
 /** Parse SSE lines from a readable stream, calling onToken for each content delta.
@@ -2474,29 +2474,21 @@ async function callGeminiStream(
   const contents: Array<{ role: string; parts: Array<Record<string, unknown>> }> = [];
   for (const m of chatMessages) {
     if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
-      // Assistant message with tool calls → model message with functionCall parts
-      const parts: Array<Record<string, unknown>> = [];
-      if (m.content) parts.push({ text: m.content });
-      // Include thoughtParts for Gemini's thought_signature requirement
-      const tParts = (m as unknown as Record<string, unknown>).thoughtParts as Array<Record<string, unknown>> | undefined;
-      for (const tc of m.tool_calls) {
-        let argsObj: Record<string, unknown> = {};
-        try { argsObj = JSON.parse(tc.function.arguments); } catch { /* empty */ }
-        const fcPart: Record<string, unknown> = { functionCall: { name: tc.function.name, args: argsObj } };
-        // Attach thought_signature if available — match by name or use any signature
-        if (tParts && tParts.length > 0) {
-          const match = tParts.find((tp) => {
-            const tpFc = tp.functionCall as { name?: string } | undefined;
-            return tpFc?.name === tc.function.name;
-          });
-          const sig = match?.thought_signature ?? tParts[0]?.thought_signature;
-          if (sig) {
-            fcPart.thought_signature = sig;
-          }
+      // Use raw model parts if available (preserves thought_signature exactly as received)
+      const rawParts = (m as unknown as Record<string, unknown>).rawModelParts as Array<Record<string, unknown>> | undefined;
+      if (rawParts && rawParts.length > 0) {
+        contents.push({ role: "model", parts: rawParts });
+      } else {
+        // Fallback: reconstruct parts (may fail for Gemini 3+ models that require thought_signature)
+        const parts: Array<Record<string, unknown>> = [];
+        if (m.content) parts.push({ text: m.content });
+        for (const tc of m.tool_calls) {
+          let argsObj: Record<string, unknown> = {};
+          try { argsObj = JSON.parse(tc.function.arguments); } catch { /* empty */ }
+          parts.push({ functionCall: { name: tc.function.name, args: argsObj } });
         }
-        parts.push(fcPart);
+        contents.push({ role: "model", parts });
       }
-      contents.push({ role: "model", parts });
     } else if (m.role === "tool") {
       // Tool result → user message with functionResponse part
       let resultObj: unknown;
@@ -2567,9 +2559,8 @@ async function callGeminiStream(
   let inputTokens = 0;
   let outputTokens = 0;
   const toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
-  // Capture thought signatures for Gemini's thought_signature requirement
-  const thoughtParts: Array<Record<string, unknown>> = [];
-  let lastThoughtSignature = "";
+  // Store raw model parts for exact replay (required for Gemini thought_signature)
+  const rawModelParts: Array<Record<string, unknown>> = [];
 
   try {
     while (true) {
@@ -2596,13 +2587,11 @@ async function callGeminiStream(
           const parts = candidates?.[0]?.content?.parts ?? [];
 
           for (const part of parts) {
+            // Store raw part for exact replay (preserves thought_signature)
+            rawModelParts.push(part);
             if (typeof part.text === "string" && part.text && !part.thought) {
               fullContent += part.text;
               onToken(part.text);
-            }
-            // Capture thought_signature — can be on thought parts or functionCall parts
-            if (part.thought_signature) {
-              lastThoughtSignature = part.thought_signature as string;
             }
             if (part.functionCall && typeof part.functionCall === "object") {
               const fc = part.functionCall as { name?: string; args?: Record<string, unknown> };
@@ -2612,14 +2601,6 @@ async function callGeminiStream(
                   name: fc.name,
                   arguments: JSON.stringify(fc.args ?? {})
                 });
-                // Attach thought_signature to this tool call
-                const sig = (part.thought_signature as string) || lastThoughtSignature;
-                if (sig) {
-                  thoughtParts.push({
-                    functionCall: fc,
-                    thought_signature: sig
-                  });
-                }
               }
             }
           }
@@ -2638,13 +2619,13 @@ async function callGeminiStream(
   } catch (err) {
     if (signal?.aborted) {
       const usage = inputTokens > 0 ? { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } : undefined;
-      return { content: fullContent || "[Streaming aborted]", usage, toolCalls: toolCalls.length > 0 ? toolCalls : undefined, thoughtParts: thoughtParts.length > 0 ? thoughtParts : undefined };
+      return { content: fullContent || "[Streaming aborted]", usage, toolCalls: toolCalls.length > 0 ? toolCalls : undefined, rawModelParts: rawModelParts.length > 0 ? rawModelParts : undefined };
     }
     throw err;
   }
 
   const usage = inputTokens > 0 ? { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } : undefined;
-  return { content: fullContent || (toolCalls.length > 0 ? "" : "[No response from model]"), usage, toolCalls: toolCalls.length > 0 ? toolCalls : undefined, thoughtParts: thoughtParts.length > 0 ? thoughtParts : undefined };
+  return { content: fullContent || (toolCalls.length > 0 ? "" : "[No response from model]"), usage, toolCalls: toolCalls.length > 0 ? toolCalls : undefined, rawModelParts: rawModelParts.length > 0 ? rawModelParts : undefined };
 }
 
 /** Callback for tool-related SSE events */
@@ -2752,9 +2733,9 @@ async function callAIStream(
         content: result.content,
         tool_calls: assistantToolCalls
       };
-      // Include thoughtParts for Gemini's thought_signature requirement
-      if (result.thoughtParts && result.thoughtParts.length > 0) {
-        (assistantMsg as unknown as Record<string, unknown>).thoughtParts = result.thoughtParts;
+      // Include rawModelParts for Gemini's thought_signature requirement (replay exactly as received)
+      if (result.rawModelParts && result.rawModelParts.length > 0) {
+        (assistantMsg as unknown as Record<string, unknown>).rawModelParts = result.rawModelParts;
       }
       chatMessages.push(assistantMsg);
 
