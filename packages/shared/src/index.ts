@@ -142,7 +142,9 @@ export const toolPermissionsSchema = z.object({
   run_command: permissionLevelSchema.optional(),
   read_file: permissionLevelSchema.optional(),
   list_files: permissionLevelSchema.optional(),
-  write_file: permissionLevelSchema.optional()
+  write_file: permissionLevelSchema.optional(),
+  grep_search: permissionLevelSchema.optional(),
+  edit_file: permissionLevelSchema.optional()
 });
 
 export const appConfigSchema = z.object({

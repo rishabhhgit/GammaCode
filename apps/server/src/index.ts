@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { randomUUID } from "node:crypto";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { readFile, readdir, stat, writeFile, mkdir, unlink } from "node:fs/promises";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { EventEmitter } from "node:events";
@@ -1106,6 +1107,36 @@ function resolveModel(config: ProviderConfig, uiModel: string): string {
 }
 
 function getSystemPrompt(): string {
+  // Build project context
+  let projectContext = "";
+  try {
+    // Get package.json info
+    const pkgPath = path.join(workspaceRoot, "package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+    projectContext += `Package: ${pkg.name || "unknown"} v${pkg.version || "0.0.0"}`;
+    if (pkg.description) projectContext += ` — ${pkg.description}`;
+    projectContext += "\n";
+    if (pkg.scripts && Object.keys(pkg.scripts).length > 0) {
+      projectContext += `Scripts: ${Object.keys(pkg.scripts).join(", ")}\n`;
+    }
+    if (pkg.dependencies) {
+      const deps = Object.keys(pkg.dependencies).slice(0, 15);
+      projectContext += `Dependencies: ${deps.join(", ")}${Object.keys(pkg.dependencies).length > 15 ? "..." : ""}\n`;
+    }
+  } catch {
+    // Not a Node.js project or no package.json
+  }
+  try {
+    // Get top-level structure
+    const entries = readdirSync(workspaceRoot, { withFileTypes: true });
+    const dirs = entries.filter((e) => e.isDirectory() && !e.name.startsWith(".") && e.name !== "node_modules").map((e) => e.name);
+    const files = entries.filter((e) => e.isFile() && !e.name.startsWith(".")).map((e) => e.name);
+    if (dirs.length > 0) projectContext += `Directories: ${dirs.join(", ")}\n`;
+    if (files.length > 0) projectContext += `Root files: ${files.join(", ")}\n`;
+  } catch {
+    // ignore
+  }
+
   return `You are Gamma Code, an elite AI coding assistant. You write, debug, and ship code. You are autonomous — you do the work, not just describe it.
 
 ## Core Rules
@@ -1120,6 +1151,8 @@ function getSystemPrompt(): string {
 - **read_file**: Read any file. USE THIS to understand code before editing. Never guess file contents.
 - **write_file**: Create or overwrite files. Write complete, working code. No placeholders.
 - **list_files**: Explore directory structure. Use to understand project layout.
+- **grep_search**: Search across files for patterns (regex supported). USE THIS to find code, functions, variables, imports. Essential for understanding codebases.
+- **edit_file**: Make surgical edits to files. USE THIS instead of write_file for small changes — safer and preserves the rest of the file.
 
 ## Behavior
 - When asked to build something: read existing code → plan → write code → test → confirm it works
@@ -1131,7 +1164,8 @@ function getSystemPrompt(): string {
 
 ## Project
 Working directory: ${workspaceRoot}
-Project: ${path.basename(workspaceRoot)}`;
+Project: ${path.basename(workspaceRoot)}
+${projectContext}`;
 }
 
 function getAgentSystemPrompt(agentId: string): string | null {
@@ -1218,6 +1252,38 @@ const AI_TOOLS_OPENAI = [
         required: ["path", "content"]
       }
     }
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "grep_search",
+      description: "Search for a pattern across all files in the workspace. Returns matching lines with file paths and line numbers. Use regex for powerful searches.",
+      parameters: {
+        type: "object",
+        properties: {
+          pattern: { type: "string", description: "Regex pattern to search for (e.g., 'TODO', 'function\\s+handleClick', 'import.*react')" },
+          path: { type: "string", description: "Optional subdirectory to search in (e.g., 'src/components'). Defaults to entire workspace." },
+          include: { type: "string", description: "Optional file glob to filter (e.g., '*.ts', '*.tsx', '*.py')" }
+        },
+        required: ["pattern"]
+      }
+    }
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "edit_file",
+      description: "Make a targeted edit to an existing file by replacing a specific string. Prefer this over write_file for small changes — it's safer and preserves the rest of the file.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Relative file path from workspace root" },
+          old_string: { type: "string", description: "The exact string to find and replace (must match exactly including indentation)" },
+          new_string: { type: "string", description: "The string to replace it with" }
+        },
+        required: ["path", "old_string", "new_string"]
+      }
+    }
   }
 ];
 
@@ -1243,6 +1309,8 @@ registerTool({ id: "run_command", description: "Execute a shell command in the w
 registerTool({ id: "read_file", description: "Read a file from the workspace", source: "core" });
 registerTool({ id: "list_files", description: "List files in a directory", source: "core" });
 registerTool({ id: "write_file", description: "Write a file to the workspace", source: "core" });
+registerTool({ id: "grep_search", description: "Search for patterns across files", source: "core" });
+registerTool({ id: "edit_file", description: "Edit a file with targeted replacements", source: "core" });
 
 function buildAiToolsAnthropic() {
   return buildAiToolsOpenAI().map((t) => ({
@@ -1275,6 +1343,8 @@ function resolveToolAction(name: string): ToolAction | null {
     case "read_file":
     case "list_files":
     case "write_file":
+    case "grep_search":
+    case "edit_file":
       return name;
     default:
       return null;
@@ -1442,6 +1512,68 @@ async function executeTool(
         return { result: `File written: ${filePath} (${content.length} chars, +${linesAdded} -${linesDeleted} lines)`, isError: false, fileChange };
       } catch (err) {
         return { result: `Error writing file: ${(err as Error).message}`, isError: true };
+      }
+    }
+    case "grep_search": {
+      const pattern = String(args.pattern ?? "");
+      if (!pattern) return { result: "Error: No search pattern provided", isError: true };
+      const searchPath = String(args.path ?? ".");
+      const include = String(args.include ?? "");
+      const absSearchDir = path.resolve(workspaceRoot, searchPath);
+      if (!absSearchDir.startsWith(workspaceRoot)) return { result: "Error: Path outside workspace", isError: true };
+      logger.info(`[tool] grep_search: "${pattern}" in ${searchPath}${include ? ` (${include})` : ""}`);
+      try {
+        // Build ripgrep command
+        const rgArgs = ["--line-number", "--color=never", "-n", pattern];
+        if (include) rgArgs.push("--glob", include);
+        rgArgs.push(absSearchDir);
+        const output = execSync(`rg ${rgArgs.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ")}`, {
+          cwd: workspaceRoot,
+          encoding: "utf8",
+          timeout: 15000,
+          maxBuffer: 2 * 1024 * 1024
+        });
+        // Make paths relative to workspace
+        const relativeOutput = output.replace(new RegExp(absSearchDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), searchPath);
+        const lines = relativeOutput.split("\n").filter(Boolean);
+        if (lines.length > 100) {
+          return { result: lines.slice(0, 100).join("\n") + `\n\n... [${lines.length} total matches, showing first 100]`, isError: false };
+        }
+        return { result: relativeOutput || "(no matches found)", isError: false };
+      } catch (err) {
+        const e = err as { stdout?: string; stderr?: string; message?: string };
+        const out = (e.stdout ?? "") + (e.stderr ?? "");
+        if (out.includes("no matches") || out.includes("No matches")) {
+          return { result: "(no matches found)", isError: false };
+        }
+        return { result: out || e.message || "Search failed", isError: true };
+      }
+    }
+    case "edit_file": {
+      const filePath = String(args.path ?? "");
+      const oldString = String(args.old_string ?? "");
+      const newString = String(args.new_string ?? "");
+      if (!filePath) return { result: "Error: No path provided", isError: true };
+      if (!oldString) return { result: "Error: No old_string provided", isError: true };
+      const absPath = path.resolve(workspaceRoot, filePath);
+      if (!absPath.startsWith(workspaceRoot)) return { result: "Error: Path outside workspace", isError: true };
+      logger.info(`[tool] edit_file: ${filePath}`);
+      try {
+        let content = await readFile(absPath, "utf8");
+        if (!content.includes(oldString)) {
+          return { result: `Error: old_string not found in ${filePath}. The text doesn't match exactly.`, isError: true };
+        }
+        const count = content.split(oldString).length - 1;
+        if (count > 1) {
+          return { result: `Error: old_string found ${count} times in ${filePath}. Provide more context to make it unique.`, isError: true };
+        }
+        const previousContent = content;
+        content = content.replace(oldString, newString);
+        await writeFile(absPath, content, "utf8");
+        const linesChanged = newString.split("\n").length - oldString.split("\n").length;
+        return { result: `File edited: ${filePath} (${linesChanged >= 0 ? "+" : ""}${linesChanged} lines)`, isError: false };
+      } catch (err) {
+        return { result: `Error editing file: ${(err as Error).message}`, isError: true };
       }
     }
     default: {
