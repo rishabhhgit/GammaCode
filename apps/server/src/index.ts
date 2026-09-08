@@ -576,7 +576,7 @@ interface ProviderConfig {
   defaultModel: string;
   /** Fallback static model IDs when dynamic fetch fails */
   fallbackModels: string[];
-  format: "openai" | "anthropic" | "copilot";
+  format: "openai" | "anthropic" | "copilot" | "gemini";
 }
 
 const providerConfigs: ProviderConfig[] = [
@@ -632,6 +632,18 @@ const providerConfigs: ProviderConfig[] = [
       "deepseek/deepseek-reasoner", "meta-llama/llama-4-maverick"
     ],
     format: "openai"
+  },
+  {
+    id: "gemini",
+    label: "Google Gemini",
+    envKey: "GEMINI_API_KEY",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    defaultModel: "gemini-2.5-flash",
+    fallbackModels: [
+      "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash",
+      "gemini-2.0-flash-lite", "gemini-1.5-pro", "gemini-1.5-flash"
+    ],
+    format: "gemini"
   },
   {
     id: "ollama",
@@ -1452,6 +1464,9 @@ async function callAI(
     if (config.format === "copilot") {
       return await callCopilot(config, apiKey, model, chatMessages);
     }
+    if (config.format === "gemini") {
+      return await callGemini(config, apiKey, model, chatMessages);
+    }
     return await callOpenAICompatible(config, apiKey, model, chatMessages);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -1602,6 +1617,58 @@ async function callAnthropic(
   }
 
   return data.content?.map((block) => block.text ?? "").join("") ?? "[No response from model]";
+}
+
+async function callGemini(
+  config: ProviderConfig,
+  apiKey: string,
+  model: string,
+  messages: ChatMessage[]
+): Promise<string> {
+  const url = `${config.baseUrl}/models/${model}:generateContent?key=${apiKey}`;
+
+  const systemMessage = messages.find((m) => m.role === "system");
+  const chatMessages = messages.filter((m) => m.role !== "system");
+
+  const contents = chatMessages.map((m) => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: m.content }]
+  }));
+
+  const body: Record<string, unknown> = {
+    contents,
+    generationConfig: {
+      maxOutputTokens: 16384,
+      temperature: 0.3
+    }
+  };
+
+  if (systemMessage?.content) {
+    body.systemInstruction = { parts: [{ text: systemMessage.content }] };
+  }
+
+  logger.info(`[ai] Calling ${config.label} (${model}) at ${config.baseUrl}/models/${model}:generateContent`);
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => "");
+    throw new Error(`HTTP ${response.status}: ${errorBody.slice(0, 500)}`);
+  }
+
+  const data = (await response.json()) as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    error?: { message?: string };
+  };
+
+  if (data.error) {
+    throw new Error(data.error.message ?? "Unknown API error");
+  }
+
+  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? "[No response from model]";
 }
 
 /* ================================================================
@@ -2165,6 +2232,75 @@ async function callAnthropicStream(
   return { content: fullContent || (toolCalls ? "" : "[No response from model]"), usage, toolCalls };
 }
 
+async function callGeminiStream(
+  config: ProviderConfig,
+  apiKey: string,
+  model: string,
+  messages: ChatMessage[],
+  onToken: TokenCallback,
+  signal?: AbortSignal
+): Promise<StreamResult> {
+  const url = `${config.baseUrl}/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
+
+  const systemMessage = messages.find((m) => m.role === "system");
+  const chatMessages = messages.filter((m) => m.role !== "system");
+
+  const contents = chatMessages.map((m) => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: m.content }]
+  }));
+
+  const body: Record<string, unknown> = {
+    contents,
+    generationConfig: {
+      maxOutputTokens: 16384,
+      temperature: 0.3
+    }
+  };
+
+  if (systemMessage?.content) {
+    body.systemInstruction = { parts: [{ text: systemMessage.content }] };
+  }
+
+  logger.info(`[ai-stream] Calling ${config.label} (${model}) at ${config.baseUrl}/models/${model}:streamGenerateContent`);
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => "");
+    throw new Error(`HTTP ${response.status}: ${errorBody.slice(0, 500)}`);
+  }
+
+  if (!response.body) {
+    throw new Error("No response body for streaming");
+  }
+
+  return parseSSEStream(
+    response.body,
+    (parsed) => {
+      const candidates = parsed.candidates as Array<{ content?: { parts?: Array<{ text?: string }> } }> | undefined;
+      return candidates?.[0]?.content?.parts?.[0]?.text ?? null;
+    },
+    onToken,
+    signal,
+    (parsed) => {
+      const usageMetadata = parsed.usageMetadata as { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number } | undefined;
+      if (usageMetadata && typeof usageMetadata.promptTokenCount === "number") {
+        return {
+          inputTokens: usageMetadata.promptTokenCount,
+          outputTokens: usageMetadata.candidatesTokenCount ?? 0,
+          totalTokens: usageMetadata.totalTokenCount ?? (usageMetadata.promptTokenCount + (usageMetadata.candidatesTokenCount ?? 0))
+        };
+      }
+      return null;
+    }
+  );
+}
+
 /** Callback for tool-related SSE events */
 type ToolEventCallback = (event: {
   type: "tool_call" | "tool_result" | "permission_request";
@@ -2233,6 +2369,8 @@ async function callAIStream(
         result = await callAnthropicStream(config, apiKey, model, chatMessages, onToken, signal);
       } else if (config.format === "copilot") {
         result = await callCopilotStream(config, apiKey, model, chatMessages, onToken, signal);
+      } else if (config.format === "gemini") {
+        result = await callGeminiStream(config, apiKey, model, chatMessages, onToken, signal);
       } else {
         result = await callOpenAICompatibleStream(config, apiKey, model, chatMessages, onToken, signal);
       }
