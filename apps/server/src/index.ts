@@ -17,6 +17,7 @@ import { loadConfig } from "./config.js";
 import { listSkills, readSkill, type SkillEntry } from "./skills.js";
 import { resolveAgents, getDefaultAgent, getAgentById } from "./agents.js";
 import { loadPlugins, type PluginRuntime } from "./plugins.js";
+import { GoogleGenerativeAI, SchemaType, FunctionCallingMode, type GenerativeModel, type ChatSession, type Part, type Content, type Tool, type ToolConfig } from "@google/generative-ai";
 import { loadShares, createShare, getShare, deleteShare } from "./sharing.js";
 import { detectCi } from "./ci.js";
 import { logger } from "./logger.js";
@@ -1808,64 +1809,43 @@ async function callGemini(
   model: string,
   messages: ChatMessage[]
 ): Promise<string> {
-  const url = `${config.baseUrl}/models/${model}:generateContent?key=${apiKey}`;
+  logger.info(`[ai] Calling ${config.label} (${model}) via official SDK`);
 
+  const genAI = new GoogleGenerativeAI(apiKey);
   const systemMessage = messages.find((m) => m.role === "system");
   const chatMessages = messages.filter((m) => m.role !== "system");
 
-  const contents = chatMessages.map((m) => ({
-    role: m.role === "assistant" ? "model" : "user",
+  // Build SDK-compatible history
+  const history = chatMessages.slice(0, -1).map((m) => ({
+    role: m.role === "assistant" ? "model" as const : "user" as const,
     parts: [{ text: m.content }]
   }));
 
-  const body: Record<string, unknown> = {
-    contents,
-    generationConfig: {
-      maxOutputTokens: 8192,
-      temperature: 0.2
-    }
-  };
+  const modelInstance = genAI.getGenerativeModel({
+    model,
+    systemInstruction: systemMessage?.content || undefined,
+    generationConfig: { maxOutputTokens: 8192, temperature: 0.2 }
+  });
 
-  if (systemMessage?.content) {
-    body.systemInstruction = { parts: [{ text: systemMessage.content }] };
-  }
-
-  logger.info(`[ai] Calling ${config.label} (${model}) at ${config.baseUrl}/models/${model}:generateContent`);
-  let response: Response = new Response();
+  // Retry on 429
   for (let attempt = 0; attempt < 3; attempt++) {
-    response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    });
-
-    if (response.status === 429) {
-      const errorBody = await response.text().catch(() => "");
-      const retryMatch = errorBody.match(/retry in ([\d.]+)/);
-      const retrySeconds = retryMatch ? parseFloat(retryMatch[1]) : 15;
-      const waitMs = Math.min((retrySeconds + 1) * 1000, 30000);
-      logger.warn(`[ai] Rate limited (429), retrying in ${Math.round(waitMs / 1000)}s (attempt ${attempt + 1}/3)`);
-      await new Promise((resolve) => setTimeout(resolve, waitMs));
-      continue;
+    try {
+      const chat = modelInstance.startChat({ history });
+      const lastUserMsg = chatMessages[chatMessages.length - 1];
+      const result = await chat.sendMessage(lastUserMsg.content);
+      return result.response.text();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED")) {
+        const waitMs = Math.min((attempt + 1) * 10_000, 30_000);
+        logger.warn(`[ai] Rate limited, retrying in ${Math.round(waitMs / 1000)}s (attempt ${attempt + 1}/3)`);
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        continue;
+      }
+      throw err;
     }
-    break;
   }
-
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
-    throw new Error(`HTTP ${response.status}: ${errorBody.slice(0, 500)}`);
-  }
-
-  const data = (await response.json()) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-    error?: { message?: string };
-  };
-
-  if (data.error) {
-    throw new Error(data.error.message ?? "Unknown API error");
-  }
-
-  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? "[No response from model]";
+  throw new Error("Rate limited after 3 retries");
 }
 
 /* ================================================================
@@ -2480,202 +2460,149 @@ async function callGeminiStream(
   onToken: TokenCallback,
   signal?: AbortSignal
 ): Promise<StreamResult> {
-  const url = `${config.baseUrl}/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
+  logger.info(`[ai-stream] Calling ${config.label} (${model}) via official SDK`);
 
+  const genAI = new GoogleGenerativeAI(apiKey);
   const systemMessage = messages.find((m) => m.role === "system");
   const chatMessages = messages.filter((m) => m.role !== "system");
 
-  // Build contents — handle tool results as user messages with functionResponse parts
-  // IMPORTANT: All consecutive tool results must be batched into a single user message
-  const contents: Array<{ role: string; parts: Array<Record<string, unknown>> }> = [];
-  for (let i = 0; i < chatMessages.length; i++) {
+  // Build SDK-compatible history (all messages except the last user message)
+  const history: Content[] = [];
+  for (let i = 0; i < chatMessages.length - 1; i++) {
     const m = chatMessages[i];
+    if (m.role === "system") continue;
+
     if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
-      // Use raw model parts if available (preserves thought_signature exactly as received)
-      const toolSignatures = (m as unknown as Record<string, unknown>).toolSignatures as Record<string, string> | undefined;
-      const parts: Array<Record<string, unknown>> = [];
+      // Model message with function calls
+      const parts: Part[] = [];
       if (m.content) parts.push({ text: m.content });
       for (const tc of m.tool_calls) {
         let argsObj: Record<string, unknown> = {};
         try { argsObj = JSON.parse(tc.function.arguments); } catch { /* empty */ }
-        const fcPart: Record<string, unknown> = { functionCall: { name: tc.function.name, args: argsObj } };
-        // Attach thought_signature if available
-        const sig = toolSignatures?.[tc.id];
-        if (sig) {
-          fcPart.thought_signature = sig;
-        }
-        parts.push(fcPart);
+        parts.push({ functionCall: { name: tc.function.name, args: argsObj } });
       }
-      contents.push({ role: "model", parts });
+      history.push({ role: "model", parts });
     } else if (m.role === "tool") {
-      // Batch all consecutive tool results into a single user message
-      const toolParts: Array<Record<string, unknown>> = [];
+      // Tool results become a user message with functionResponse parts
+      const toolParts: Part[] = [];
+      // Collect consecutive tool messages
       while (i < chatMessages.length && chatMessages[i].role === "tool") {
         const toolMsg = chatMessages[i];
         let resultObj: unknown;
         try { resultObj = JSON.parse(toolMsg.content); } catch { resultObj = { result: toolMsg.content }; }
-        toolParts.push({ functionResponse: { name: toolMsg.name ?? "unknown", response: resultObj } });
+        toolParts.push({ functionResponse: { name: toolMsg.name ?? "unknown", response: resultObj as Record<string, unknown> } });
         i++;
       }
-      i--; // The for loop will increment i again
+      i--; // for loop will increment
       if (toolParts.length > 0) {
-        contents.push({ role: "user", parts: toolParts });
+        history.push({ role: "user", parts: toolParts });
       }
     } else {
-      const parts: Array<Record<string, unknown>> = [];
+      const parts: Part[] = [];
       if (m.content) parts.push({ text: m.content });
-      // Add attachments as inline_data parts
       if (m.attachments) {
         for (const att of m.attachments) {
-          parts.push({
-            inline_data: {
-              mime_type: att.mimeType,
-              data: att.data
-            }
-          });
+          parts.push({ inlineData: { mimeType: att.mimeType, data: att.data } });
         }
       }
-      contents.push({
-        role: m.role === "assistant" ? "model" : "user",
-        parts
-      });
+      history.push({ role: m.role === "assistant" ? "model" : "user", parts });
     }
   }
 
-  const body: Record<string, unknown> = {
-    contents,
-    generationConfig: {
-      maxOutputTokens: 8192,
-      temperature: 0.2
-    },
-    tools: [{ functionDeclarations: buildAiToolsGemini() }],
-    toolConfig: { functionCallingConfig: { mode: "AUTO" } }
-  };
+  // Build the model with tools
+  const geminiTools = [{
+    functionDeclarations: buildAiToolsGemini().map((t) => ({
+      name: t.name,
+      description: t.description,
+      parameters: {
+        type: SchemaType.OBJECT,
+        properties: t.parameters.properties,
+        required: t.parameters.required
+      }
+    }))
+  }];
 
-  if (systemMessage?.content) {
-    body.systemInstruction = { parts: [{ text: systemMessage.content }] };
-  }
+  const modelInstance = genAI.getGenerativeModel({
+    model,
+    systemInstruction: systemMessage?.content || undefined,
+    tools: geminiTools[0].functionDeclarations?.length ? geminiTools as Tool[] : undefined,
+    toolConfig: geminiTools[0].functionDeclarations?.length ? { functionCallingConfig: { mode: FunctionCallingMode.AUTO } } as ToolConfig : undefined,
+    generationConfig: { maxOutputTokens: 8192, temperature: 0.2 }
+  });
 
-  logger.info(`[ai-stream] Calling ${config.label} (${model}) at ${config.baseUrl}/models/${model}:streamGenerateContent`);
-  logger.info(`[ai-stream] Request body keys: ${Object.keys(body).join(", ")}`);
-  // Retry on 429 rate limits (up to 3 attempts with exponential backoff)
-  let streamResponse: Response = new Response();
+  // Retry on 429
   for (let attempt = 0; attempt < 3; attempt++) {
-    streamResponse = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal
-    });
+    try {
+      const chat = modelInstance.startChat({ history });
+      const lastMsg = chatMessages[chatMessages.length - 1];
 
-    if (streamResponse.status === 429) {
-      const errorBody = await streamResponse.text().catch(() => "");
-      const retryMatch = errorBody.match(/retry in ([\d.]+)/);
-      const retrySeconds = retryMatch ? parseFloat(retryMatch[1]) : 15;
-      const waitMs = Math.min((retrySeconds + 1) * 1000, 30000);
-      logger.warn(`[ai-stream] Rate limited (429), retrying in ${Math.round(waitMs / 1000)}s (attempt ${attempt + 1}/3)`);
-      onToken(`\n\n⏳ Rate limited. Retrying in ${Math.round(waitMs / 1000)}s...\n\n`);
-      await new Promise((resolve) => setTimeout(resolve, waitMs));
-      continue;
-    }
-
-    break;
-  }
-
-  if (!streamResponse.ok) {
-    const errorBody = await streamResponse.text().catch(() => "");
-    logger.error(`[ai-stream] Gemini API error ${streamResponse.status}: ${errorBody.slice(0, 500)}`);
-    throw new Error(`HTTP ${streamResponse.status}: ${errorBody.slice(0, 500)}`);
-  }
-
-  if (!streamResponse.body) {
-    throw new Error("No response body for streaming");
-  }
-
-  // Gemini SSE: each chunk has candidates[].content.parts[] with either text, functionCall, or thought
-  const reader = streamResponse.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let fullContent = "";
-  let inputTokens = 0;
-  let outputTokens = 0;
-  const toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
-  // Store thought_signature per tool call ID (required for Gemini 3.x)
-  const toolSignatures: Record<string, string> = {};
-  let lastThoughtSignature = "";
-
-  try {
-    while (true) {
-      if (signal?.aborted) {
-        await reader.cancel();
-        break;
-      }
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data: ")) continue;
-        const payload = trimmed.slice(6);
-        if (payload === "[DONE]") continue;
-
-        try {
-          const parsed = JSON.parse(payload) as Record<string, unknown>;
-          const candidates = parsed.candidates as Array<{ content?: { parts?: Array<Record<string, unknown>> } }> | undefined;
-          const parts = candidates?.[0]?.content?.parts ?? [];
-
-          for (const part of parts) {
-            // Capture thought_signature from thought parts or functionCall parts
-            if (part.thought_signature) {
-              lastThoughtSignature = part.thought_signature as string;
-            }
-            if (typeof part.text === "string" && part.text && !part.thought) {
-              fullContent += part.text;
-              onToken(part.text);
-            }
-            if (part.functionCall && typeof part.functionCall === "object") {
-              const fc = part.functionCall as { name?: string; args?: Record<string, unknown> };
-              if (fc.name) {
-                const toolId = `tool_${toolCalls.length}`;
-                toolCalls.push({
-                  id: toolId,
-                  name: fc.name,
-                  arguments: JSON.stringify(fc.args ?? {})
-                });
-                // Attach thought_signature to this tool call
-                const sig = (part.thought_signature as string) || lastThoughtSignature;
-                if (sig) {
-                  toolSignatures[toolId] = sig;
-                }
-              }
-            }
-          }
-
-          // Extract usage metadata
-          const usageMetadata = parsed.usageMetadata as { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number } | undefined;
-          if (usageMetadata && typeof usageMetadata.promptTokenCount === "number") {
-            inputTokens = usageMetadata.promptTokenCount;
-            outputTokens = usageMetadata.candidatesTokenCount ?? 0;
-          }
-        } catch {
-          // skip malformed SSE lines
+      // Build parts for the last message (handle attachments)
+      const lastParts: Part[] = [];
+      if (lastMsg.content) lastParts.push({ text: lastMsg.content });
+      if (lastMsg.attachments) {
+        for (const att of lastMsg.attachments) {
+          lastParts.push({ inlineData: { mimeType: att.mimeType, data: att.data } });
         }
       }
-    }
-  } catch (err) {
-    if (signal?.aborted) {
-      const usage = inputTokens > 0 ? { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } : undefined;
-      return { content: fullContent || "[Streaming aborted]", usage, toolCalls: toolCalls.length > 0 ? toolCalls : undefined, toolSignatures: Object.keys(toolSignatures).length > 0 ? toolSignatures : undefined };
-    }
-    throw err;
-  }
 
-  const usage = inputTokens > 0 ? { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } : undefined;
-  return { content: fullContent || (toolCalls.length > 0 ? "" : "[No response from model]"), usage, toolCalls: toolCalls.length > 0 ? toolCalls : undefined, toolSignatures: Object.keys(toolSignatures).length > 0 ? toolSignatures : undefined };
+      const result = await chat.sendMessageStream(lastParts.length === 1 && lastParts[0].text ? lastMsg.content : lastParts);
+
+      let fullContent = "";
+      let inputTokens = 0;
+      let outputTokens = 0;
+      const toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
+
+      for await (const chunk of result.stream) {
+        // Check abort
+        if (signal?.aborted) break;
+
+        const candidates = (chunk as unknown as Record<string, unknown>).candidates as Array<{ content?: { parts?: Array<Record<string, unknown>> } }> | undefined;
+        const parts = candidates?.[0]?.content?.parts ?? [];
+
+        for (const part of parts) {
+          if (typeof part.text === "string" && part.text && !part.thought) {
+            fullContent += part.text;
+            onToken(part.text);
+          }
+          if (part.functionCall && typeof part.functionCall === "object") {
+            const fc = part.functionCall as { name?: string; args?: Record<string, unknown> };
+            if (fc.name) {
+              toolCalls.push({
+                id: `tool_${toolCalls.length}`,
+                name: fc.name,
+                arguments: JSON.stringify(fc.args ?? {})
+              });
+            }
+          }
+        }
+
+        // Extract usage from the final chunk
+        const usageMeta = (chunk as unknown as Record<string, unknown>).usageMetadata as { promptTokenCount?: number; candidatesTokenCount?: number } | undefined;
+        if (usageMeta?.promptTokenCount) {
+          inputTokens = usageMeta.promptTokenCount;
+          outputTokens = usageMeta.candidatesTokenCount ?? 0;
+        }
+      }
+
+      const usage = inputTokens > 0 ? { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } : undefined;
+      return {
+        content: fullContent || (toolCalls.length > 0 ? "" : "[No response from model]"),
+        usage,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined
+      };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED")) {
+        const waitMs = Math.min((attempt + 1) * 10_000, 30_000);
+        logger.warn(`[ai-stream] Rate limited, retrying in ${Math.round(waitMs / 1000)}s (attempt ${attempt + 1}/3)`);
+        onToken(`\n\n⏳ Rate limited. Retrying in ${Math.round(waitMs / 1000)}s...\n\n`);
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("Rate limited after 3 retries");
 }
 
 /** Callback for tool-related SSE events */

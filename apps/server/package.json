@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@gamma-code/shared": "workspace:*",
+    "@google/generative-ai": "^0.24.1",
     "dotenv": "^16.4.7",
     "node-pty": "^1.1.0",
     "ws": "^8.19.0",
