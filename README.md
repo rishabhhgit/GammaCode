@@ -160,34 +160,6 @@ GammaCode/
 | GET | `/api/git/status` | Git branch and status |
 | GET | `/api/provider-usage` | API usage per provider |
 
-## Configuration
-
-### gamma-code.jsonc
-
-```jsonc
-{
-  "permissions": {
-    "tools": {
-      "run_command": "ask",    // "allow" | "ask" | "deny"
-      "read_file": "allow",
-      "write_file": "ask",
-      "list_files": "allow"
-    }
-  },
-  "agents": {
-    "enabled": true,
-    "list": [
-      {
-        "id": "reviewer",
-        "label": "Code Reviewer",
-        "description": "Reviews code for bugs and improvements",
-        "systemPrompt": "You are a senior code reviewer..."
-      }
-    ]
-  }
-}
-```
-
 ## License
 
 MIT
