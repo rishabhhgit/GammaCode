@@ -2026,7 +2026,7 @@ interface UsageData {
 interface StreamResult {
   content: string;
   usage?: UsageData;
-  toolCalls?: Array<{ id: string; name: string; arguments: string; thoughtSignature?: string }>;
+  toolCalls?: Array<{ id: string; name: string; arguments: string; extraContent?: Record<string, unknown> }>;
   fileChanges?: FileChange[];
 }
 
@@ -2038,7 +2038,7 @@ async function parseSSEStream(
   onToken: TokenCallback,
   signal?: AbortSignal,
   extractUsage?: (parsed: Record<string, unknown>) => UsageData | null,
-  extractToolCallDelta?: (parsed: Record<string, unknown>) => { index: number; id?: string; name?: string; arguments?: string; thoughtSignature?: string } | null
+  extractToolCallDelta?: (parsed: Record<string, unknown>) => { index: number; id?: string; name?: string; arguments?: string; extraContent?: Record<string, unknown> } | null
 ): Promise<StreamResult> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -2046,7 +2046,7 @@ async function parseSSEStream(
   let fullContent = "";
   let usage: UsageData | undefined;
   // Accumulate tool calls by index
-  const toolCallAccum = new Map<number, { id: string; name: string; arguments: string; thoughtSignature?: string }>();
+  const toolCallAccum = new Map<number, { id: string; name: string; arguments: string; extraContent?: Record<string, unknown> }>();
 
   try {
     while (true) {
@@ -2081,13 +2081,13 @@ async function parseSSEStream(
             const existing = toolCallAccum.get(tc.index);
             if (existing) {
               if (tc.arguments) existing.arguments += tc.arguments;
-              if (tc.thoughtSignature) existing.thoughtSignature = tc.thoughtSignature;
+              if (tc.extraContent) existing.extraContent = tc.extraContent;
             } else {
               toolCallAccum.set(tc.index, {
                 id: tc.id ?? `tool_${tc.index}`,
                 name: tc.name ?? "",
                 arguments: tc.arguments ?? "",
-                thoughtSignature: tc.thoughtSignature
+                extraContent: tc.extraContent
               });
             }
           }
@@ -2212,14 +2212,13 @@ async function callOpenAICompatibleStream(
     (parsed) => {
       const choices = parsed.choices as Array<{
         delta?: { 
-          tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string }; extra_content?: { google?: { thought_signature?: string } } }>;
+          tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string }; extra_content?: Record<string, unknown> }>;
         }
       }> | undefined;
       const tc = choices?.[0]?.delta?.tool_calls?.[0];
       if (!tc) return null;
       // Gemini OpenAI-compatible returns thought_signature in extra_content.google.thought_signature
-      const thoughtSignature = tc.extra_content?.google?.thought_signature;
-      return { index: tc.index, id: tc.id, name: tc.function?.name, arguments: tc.function?.arguments, thoughtSignature };
+      return { index: tc.index, id: tc.id, name: tc.function?.name, arguments: tc.function?.arguments, extraContent: tc.extra_content };
     }
   );
 }
@@ -2877,8 +2876,8 @@ async function callAIStream(
         id: tc.id,
         type: "function" as const,
         function: { name: tc.name, arguments: tc.arguments },
-        // Gemini 3 requires thought_signature in extra_content.google.thought_signature
-        ...(tc.thoughtSignature ? { extra_content: { google: { thought_signature: tc.thoughtSignature } } } : {})
+        // Preserve extra_content (includes thought_signature for Gemini 3)
+        ...(tc.extraContent ? { extra_content: tc.extraContent } : {})
       }));
       const assistantMsg: ChatMessage = {
         role: "assistant",
