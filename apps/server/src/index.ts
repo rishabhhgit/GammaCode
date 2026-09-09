@@ -2212,14 +2212,13 @@ async function callOpenAICompatibleStream(
     (parsed) => {
       const choices = parsed.choices as Array<{
         delta?: { 
-          tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }>;
-          thought_signature?: string;
+          tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string }; extra_content?: { google?: { thought_signature?: string } } }>;
         }
       }> | undefined;
       const tc = choices?.[0]?.delta?.tool_calls?.[0];
       if (!tc) return null;
-      // Gemini OpenAI-compatible returns thought_signature in the delta
-      const thoughtSignature = choices?.[0]?.delta?.thought_signature;
+      // Gemini OpenAI-compatible returns thought_signature in extra_content.google.thought_signature
+      const thoughtSignature = tc.extra_content?.google?.thought_signature;
       return { index: tc.index, id: tc.id, name: tc.function?.name, arguments: tc.function?.arguments, thoughtSignature };
     }
   );
@@ -2877,7 +2876,9 @@ async function callAIStream(
       const assistantToolCalls = uniqueToolCalls.map((tc) => ({
         id: tc.id,
         type: "function" as const,
-        function: { name: tc.name, arguments: tc.arguments }
+        function: { name: tc.name, arguments: tc.arguments },
+        // Gemini 3 requires thought_signature in extra_content.google.thought_signature
+        ...(tc.thoughtSignature ? { extra_content: { google: { thought_signature: tc.thoughtSignature } } } : {})
       }));
       const assistantMsg: ChatMessage = {
         role: "assistant",
