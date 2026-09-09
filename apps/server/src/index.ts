@@ -2796,9 +2796,18 @@ async function callAIStream(
 
       // Process tool calls
       logger.info(`[ai-stream] Round ${round + 1}: AI returned ${result.toolCalls.length} tool call(s)`);
+      logger.info(`[ai-stream] Tool calls: ${JSON.stringify(result.toolCalls.map((tc) => ({ id: tc.id, name: tc.name })))}`);
+
+      // Deduplicate tool calls by ID and ensure unique IDs
+      const seenIds = new Set<string>();
+      const uniqueToolCalls = result.toolCalls.filter((tc) => {
+        if (seenIds.has(tc.id)) return false;
+        seenIds.add(tc.id);
+        return true;
+      });
 
       // Add the assistant message with tool calls to conversation
-      const assistantToolCalls = result.toolCalls.map((tc) => ({
+      const assistantToolCalls = uniqueToolCalls.map((tc) => ({
         id: tc.id,
         type: "function" as const,
         function: { name: tc.name, arguments: tc.arguments }
@@ -2811,7 +2820,7 @@ async function callAIStream(
       chatMessages.push(assistantMsg);
 
       // Execute each tool call and append results
-      for (const tc of result.toolCalls) {
+      for (const tc of uniqueToolCalls) {
         allToolCalls.push(tc);
 
         // Notify client that a tool call is starting
