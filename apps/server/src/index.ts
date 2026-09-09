@@ -1988,8 +1988,8 @@ async function callGemini(
     generationConfig: { maxOutputTokens: 8192, temperature: 0.2 }
   });
 
-  // Retry on 429
-  for (let attempt = 0; attempt < 3; attempt++) {
+  // Retry on 429 with exponential backoff and jitter
+  for (let attempt = 0; attempt < 5; attempt++) {
     try {
       const chat = modelInstance.startChat({ history });
       const lastUserMsg = chatMessages[chatMessages.length - 1];
@@ -1998,15 +1998,20 @@ async function callGemini(
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED")) {
-        const waitMs = Math.min((attempt + 1) * 10_000, 30_000);
-        logger.warn(`[ai] Rate limited, retrying in ${Math.round(waitMs / 1000)}s (attempt ${attempt + 1}/3)`);
-        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        // Parse retry-after from error or use exponential backoff with jitter
+        let retryAfter = 0;
+        const retryMatch = msg.match(/retry.*?in\s+(\d+\.?\d*)/i);
+        if (retryMatch) retryAfter = parseFloat(retryMatch[1]) * 1000;
+        
+        const backoffMs = retryAfter || (Math.min(2 ** attempt, 32) * 2000 + Math.random() * 2000);
+        logger.warn(`[ai] Rate limited, retrying in ${Math.round(backoffMs / 1000)}s (attempt ${attempt + 1}/5)`);
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
         continue;
       }
       throw err;
     }
   }
-  throw new Error("Rate limited after 3 retries");
+  throw new Error("Rate limited after 5 retries");
 }
 
 /* ================================================================
@@ -2177,18 +2182,36 @@ async function callOpenAICompatibleStream(
   logger.info(`[ai-stream] Calling ${config.label} (${model}) at ${url}`);
   logger.info(`[ai-stream] Tools sent: ${toolDefs.map((t) => t.function.name).join(", ")}`);
   logger.info(`[ai-stream] Body snippet: ${body.slice(0, 500)}`);
-  const response = await fetch(url, { method: "POST", headers, body, signal });
 
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
-    throw new Error(`HTTP ${response.status}: ${errorBody.slice(0, 500)}`);
-  }
+  // Retry with exponential backoff on 429
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const response = await fetch(url, { method: "POST", headers, body, signal });
 
-  if (!response.body) {
-    throw new Error("No response body for streaming");
-  }
+    if (response.status === 429) {
+      const errorBody = await response.text().catch(() => "");
+      // Parse retry-after from error or use exponential backoff
+      let retryAfter = 0;
+      const retryMatch = errorBody.match(/retry.*?in\s+(\d+\.?\d*)/i);
+      if (retryMatch) retryAfter = parseFloat(retryMatch[1]) * 1000;
+      
+      // Exponential backoff with jitter: 2^attempt * 2000ms + random 0-2000ms
+      const backoffMs = retryAfter || (Math.min(2 ** attempt, 32) * 2000 + Math.random() * 2000);
+      logger.warn(`[ai-stream] Rate limited (429), retrying in ${Math.round(backoffMs / 1000)}s (attempt ${attempt + 1}/5)`);
+      onToken(`\n\n⏳ Rate limited. Retrying in ${Math.round(backoffMs / 1000)}s...\n\n`);
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      continue;
+    }
 
-  return parseSSEStream(
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => "");
+      throw new Error(`HTTP ${response.status}: ${errorBody.slice(0, 500)}`);
+    }
+
+    if (!response.body) {
+      throw new Error("No response body for streaming");
+    }
+
+    return parseSSEStream(
     response.body,
     (parsed) => {
       const choices = parsed.choices as Array<{ delta?: { content?: string } }> | undefined;
@@ -2221,6 +2244,8 @@ async function callOpenAICompatibleStream(
       return { index: tc.index, id: tc.id, name: tc.function?.name, arguments: tc.function?.arguments, extraContent: tc.extra_content };
     }
   );
+  }
+  throw new Error(`Rate limited after 5 retries for ${config.label}`);
 }
 
 async function callCopilotStream(
@@ -2686,8 +2711,8 @@ async function callGeminiStream(
     generationConfig: { maxOutputTokens: 8192, temperature: 0.2 }
   });
 
-  // Retry on 429
-  for (let attempt = 0; attempt < 3; attempt++) {
+  // Retry on 429 with exponential backoff and jitter
+  for (let attempt = 0; attempt < 5; attempt++) {
     try {
       const chat = modelInstance.startChat({ history });
       const lastMsg = chatMessages[chatMessages.length - 1];
@@ -2756,16 +2781,21 @@ async function callGeminiStream(
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED")) {
-        const waitMs = Math.min((attempt + 1) * 10_000, 30_000);
-        logger.warn(`[ai-stream] Rate limited, retrying in ${Math.round(waitMs / 1000)}s (attempt ${attempt + 1}/3)`);
-        onToken(`\n\n⏳ Rate limited. Retrying in ${Math.round(waitMs / 1000)}s...\n\n`);
-        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        // Parse retry-after from error or use exponential backoff with jitter
+        let retryAfter = 0;
+        const retryMatch = msg.match(/retry.*?in\s+(\d+\.?\d*)/i);
+        if (retryMatch) retryAfter = parseFloat(retryMatch[1]) * 1000;
+        
+        const backoffMs = retryAfter || (Math.min(2 ** attempt, 32) * 2000 + Math.random() * 2000);
+        logger.warn(`[ai-stream] Rate limited, retrying in ${Math.round(backoffMs / 1000)}s (attempt ${attempt + 1}/5)`);
+        onToken(`\n\n⏳ Rate limited. Retrying in ${Math.round(backoffMs / 1000)}s...\n\n`);
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
         continue;
       }
       throw err;
     }
   }
-  throw new Error("Rate limited after 3 retries");
+  throw new Error("Rate limited after 5 retries");
 }
 
 /** Callback for tool-related SSE events */
