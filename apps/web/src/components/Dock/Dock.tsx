@@ -69,12 +69,15 @@ interface SessionDetail {
 }
 
 const MODEL_CONTEXT_LIMITS: Record<string, number> = {
-  "gpt-5": 1000000,
+  "gpt-5": 400000,
   "gpt-4o": 128000,
   o1: 200000,
   "o1-mini": 128000,
   "claude-opus-4-20250514": 200000,
+  "claude-opus-4-6": 200000,
   "claude-sonnet-4-20250514": 200000,
+  "claude-sonnet-4-6": 200000,
+  "claude-haiku-4-5": 200000,
   // Gemini
   "gemini-3.8-flash": 1048576,
   "gemini-3.7-flash": 1048576,
@@ -155,6 +158,11 @@ function prettifyModelId(raw: string): string {
     "claude-sonnet-4": "Claude Sonnet 4",
     "claude-sonnet-4.5": "Claude Sonnet 4.5",
     "claude-sonnet-4.6": "Claude Sonnet 4.6",
+    "claude-3-5-sonnet": "Claude 3.5 Sonnet",
+    "claude-3-5-haiku": "Claude 3.5 Haiku",
+    "claude-3-opus": "Claude 3 Opus",
+    "claude-3-sonnet": "Claude 3 Sonnet",
+    "claude-3-haiku": "Claude 3 Haiku",
     "gemini-3.8-flash": "Gemini 3.8 Flash",
     "gemini-3.7-flash": "Gemini 3.7 Flash",
     "gemini-3.6-flash": "Gemini 3.6 Flash",

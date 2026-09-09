@@ -115,22 +115,22 @@ const wsUrl = import.meta.env.VITE_WS_URL ?? "ws://127.0.0.1:3031";
 
 /** Known model context window sizes (in tokens) - matches server defaults */
 const MODEL_CONTEXT_LIMITS: Record<string, number> = {
-  // GPT-5
-  "gpt-5": 1000000,
-  "gpt-5.1": 1000000,
-  "gpt-5.2": 1000000,
-  "gpt-5.3": 1000000,
-  "gpt-5.4": 1000000,
-  "gpt-5-mini": 1000000,
-  "gpt-5.1-mini": 1000000,
-  "gpt-5-codex": 1000000,
-  // GPT-4.5
-  "gpt-4.5": 1000000,
-  "gpt-4.5-mini": 1000000,
-  // GPT-4.1
-  "gpt-4.1": 1000000,
-  "gpt-4.1-mini": 1000000,
-  "gpt-4.1-nano": 1000000,
+  // GPT-5 series (400K context)
+  "gpt-5": 400000,
+  "gpt-5.1": 400000,
+  "gpt-5.2": 400000,
+  "gpt-5.3": 400000,
+  "gpt-5.4": 400000,
+  "gpt-5-mini": 400000,
+  "gpt-5.1-mini": 400000,
+  "gpt-5-codex": 400000,
+  // GPT-4.5 (128K)
+  "gpt-4.5": 128000,
+  "gpt-4.5-mini": 128000,
+  // GPT-4.1 (1M)
+  "gpt-4.1": 1047576,
+  "gpt-4.1-mini": 1047576,
+  "gpt-4.1-nano": 1047576,
   // GPT-4o
   "gpt-4o": 128000,
   "gpt-4o-mini": 128000,
@@ -149,18 +149,18 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   "o4-mini": 200000,
   // Claude 4
   "claude-opus-4-20250514": 200000,
-  "claude-opus-4-6-20250514": 200000,
+  "claude-opus-4-6": 200000,
   "claude-sonnet-4-20250514": 200000,
-  "claude-sonnet-4-6-20250514": 200000,
-  "claude-haiku-4-20250514": 200000,
+  "claude-sonnet-4-6": 200000,
+  "claude-haiku-4-5": 200000,
   // Claude 3.5
-  "claude-3.5-sonnet": 200000,
-  "claude-3.5-haiku": 200000,
+  "claude-3-5-sonnet-20241022": 200000,
+  "claude-3-5-haiku-20241022": 200000,
   // Claude 3
-  "claude-3-opus": 200000,
-  "claude-3-sonnet": 200000,
-  "claude-3-haiku": 200000,
-  // Gemini
+  "claude-3-opus-20240229": 200000,
+  "claude-3-sonnet-20240229": 200000,
+  "claude-3-haiku-20240307": 200000,
+  // Gemini (1M context)
   "gemini-3.8-flash": 1048576,
   "gemini-3.7-flash": 1048576,
   "gemini-3.6-flash": 1048576,
@@ -182,17 +182,14 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   "grok-code-fast-1": 131072,
   // ChatGPT
   "chatgpt-4o-latest": 128000,
-  // DeepSeek
-  "deepseek-chat": 64000,
-  "deepseek-coder": 64000,
-  "deepseek-reasoner": 64000,
+  // DeepSeek (128K)
+  "deepseek-chat": 128000,
+  "deepseek-coder": 128000,
+  "deepseek-reasoner": 128000,
   // Llama
   "llama-4-maverick": 200000,
   "llama-3.3-70b": 128000,
   "llama-3.1-405b": 128000,
-  // Mistral
-  "mistral-large": 128000,
-  "mistral-small": 128000,
   // CodeLlama
   "codellama-70b": 128000,
   "codellama-34b": 128000,
@@ -317,6 +314,11 @@ function prettifyModelId(raw: string): string {
     "claude-sonnet-4": "Claude Sonnet 4",
     "claude-sonnet-4.5": "Claude Sonnet 4.5",
     "claude-sonnet-4.6": "Claude Sonnet 4.6",
+    "claude-3-5-sonnet": "Claude 3.5 Sonnet",
+    "claude-3-5-haiku": "Claude 3.5 Haiku",
+    "claude-3-opus": "Claude 3 Opus",
+    "claude-3-sonnet": "Claude 3 Sonnet",
+    "claude-3-haiku": "Claude 3 Haiku",
     "gemini-3.8-flash": "Gemini 3.8 Flash",
     "gemini-3.7-flash": "Gemini 3.7 Flash",
     "gemini-3.6-flash": "Gemini 3.6 Flash",
