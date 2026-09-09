@@ -110,14 +110,15 @@ function prettifyModelId(raw: string): string {
     "gemini-3.1-pro-preview": "Gemini 3.1 Pro Preview",
     "gemini-2.5-pro": "Gemini 2.5 Pro",
     "gemini-2.5-flash": "Gemini 2.5 Flash",
+    "gemini-3.5-flash": "Gemini 3.5 Flash",
+    "gemini-3.1-pro-preview": "Gemini 3.1 Pro",
     "grok-code-fast-1": "Grok Code Fast 1",
-    "mistral-small-latest": "Mistral Small",
-    "mistral-medium-latest": "Mistral Medium",
-    "mistral-large-latest": "Mistral Large",
+    "mistral-medium-latest": "Mistral Medium 3.5",
+    "mistral-small-latest": "Mistral Small 4",
+    "mistral-large-latest": "Mistral Large 3",
     "codestral-latest": "Codestral",
-    "open-mistral-nemo": "Mistral Nemo",
-    "open-mixtral-8x22b": "Mixtral 8x22B",
-    "open-mixtral-8x7b": "Mixtral 8x7B",
+    "ministral-3-14b": "Ministral 3 14B",
+    "ministral-3-8b": "Ministral 3 8B",
   };
   const stripped = raw
     .replace(/-\d{4}-?\d{2}-?\d{2}$/, "")

@@ -75,22 +75,18 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   "o1-mini": 128000,
   "claude-opus-4-20250514": 200000,
   "claude-sonnet-4-20250514": 200000,
-  "gemini-3-flash": 1000000,
-  "gemini-3.1-pro-preview": 2000000,
-  "gemini-2.5-pro": 2000000,
+  // Gemini
+  "gemini-2.5-pro": 1000000,
   "gemini-2.5-flash": 1000000,
-  "gemini-2.0-flash": 1000000,
-  "gemini-2.0-flash-lite": 1000000,
-  "gemini-1.5-pro": 2000000,
-  "gemini-1.5-flash": 1000000,
+  "gemini-3.5-flash": 1000000,
+  "gemini-3.1-pro-preview": 1000000,
   // Mistral
-  "mistral-small-latest": 32000,
-  "mistral-medium-latest": 32000,
+  "mistral-medium-latest": 128000,
+  "mistral-small-latest": 256000,
   "mistral-large-latest": 128000,
-  "codestral-latest": 32000,
-  "open-mistral-nemo": 128000,
-  "open-mixtral-8x22b": 65536,
-  "open-mixtral-8x7b": 32000,
+  "codestral-latest": 256000,
+  "ministral-3-14b": 128000,
+  "ministral-3-8b": 128000,
 };
 
 function getModelContextLimit(
@@ -159,14 +155,15 @@ function prettifyModelId(raw: string): string {
     "gemini-3.1-pro-preview": "Gemini 3.1 Pro Preview",
     "gemini-2.5-pro": "Gemini 2.5 Pro",
     "gemini-2.5-flash": "Gemini 2.5 Flash",
+    "gemini-3.5-flash": "Gemini 3.5 Flash",
+    "gemini-3.1-pro-preview": "Gemini 3.1 Pro",
     "grok-code-fast-1": "Grok Code Fast 1",
-    "mistral-small-latest": "Mistral Small",
-    "mistral-medium-latest": "Mistral Medium",
-    "mistral-large-latest": "Mistral Large",
+    "mistral-medium-latest": "Mistral Medium 3.5",
+    "mistral-small-latest": "Mistral Small 4",
+    "mistral-large-latest": "Mistral Large 3",
     "codestral-latest": "Codestral",
-    "open-mistral-nemo": "Mistral Nemo",
-    "open-mixtral-8x22b": "Mixtral 8x22B",
-    "open-mixtral-8x7b": "Mixtral 8x7B",
+    "ministral-3-14b": "Ministral 3 14B",
+    "ministral-3-8b": "Ministral 3 8B",
   };
   const stripped = raw
     .replace(/-\d{4}-?\d{2}-?\d{2}$/, "")

@@ -648,9 +648,8 @@ const providerConfigs: ProviderConfig[] = [
     baseUrl: "https://api.mistral.ai/v1",
     defaultModel: "mistral-small-latest",
     fallbackModels: [
-      "mistral-small-latest", "mistral-medium-latest", "mistral-large-latest",
-      "codestral-latest", "open-mistral-nemo", "open-mixtral-8x22b",
-      "open-mixtral-8x7b"
+      "mistral-medium-latest", "mistral-small-latest", "mistral-large-latest",
+      "codestral-latest", "ministral-3-14b", "ministral-3-8b"
     ],
     format: "openai"
   },
@@ -661,8 +660,8 @@ const providerConfigs: ProviderConfig[] = [
     baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     defaultModel: "gemini-2.5-flash",
     fallbackModels: [
-      "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash",
-      "gemini-2.0-flash-lite", "gemini-1.5-pro", "gemini-1.5-flash"
+      "gemini-2.5-flash", "gemini-2.5-pro", "gemini-3.5-flash",
+      "gemini-3.1-pro-preview"
     ],
     format: "gemini"
   },
@@ -1042,9 +1041,14 @@ async function fetchModelsForProvider(config: ProviderConfig): Promise<string[]>
       });
       if (!res.ok) throw new Error(`Mistral /models returned ${res.status}`);
       const data = (await res.json()) as { data?: Array<{ id: string }> };
+      // Only show latest supported models — filter out deprecated/embedding/moderation
+      const latestModels = new Set([
+        "mistral-medium-latest", "mistral-small-latest", "mistral-large-latest",
+        "codestral-latest", "ministral-3-14b", "ministral-3-8b", "ministral-3-3b"
+      ]);
       models = (data.data ?? [])
         .map((m) => m.id)
-        .filter((id) => !id.includes("embed") && !id.includes("Moderation"))
+        .filter((id) => latestModels.has(id) || (id.includes("mistral") && !id.includes("embed") && !id.includes("Moderation") && !id.includes("nemo") && !id.includes("mixtral")))
         .sort();
     } else if (config.format === "anthropic") {
       const res = await fetch(`${config.baseUrl}/models?limit=1000`, {
@@ -1082,9 +1086,19 @@ async function fetchModelsForProvider(config: ProviderConfig): Promise<string[]>
       const res = await fetch(`${config.baseUrl}/models?key=${apiKey}`);
       if (!res.ok) throw new Error(`Gemini /models returned ${res.status}`);
       const data = (await res.json()) as { models?: Array<{ name: string }> };
+      // Only show latest supported Gemini models
+      const latestGemini = new Set([
+        "gemini-2.5-flash", "gemini-2.5-pro",
+        "gemini-3.5-flash", "gemini-3.5-flash-lite",
+        "gemini-3.1-pro-preview"
+      ]);
       models = (data.models ?? [])
         .map((m) => m.name.replace("models/", ""))
-        .filter((id) => id.includes("gemini") && !id.includes(":batch"))
+        .filter((id) => {
+          if (!id.includes("gemini") || id.includes(":batch")) return false;
+          // Accept exact latest models or any gemini-3.x/2.5 model
+          return latestGemini.has(id) || id.startsWith("gemini-3.") || id.startsWith("gemini-2.5");
+        })
         .sort();
     }
 
