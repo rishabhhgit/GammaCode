@@ -234,7 +234,8 @@ export const createSessionSchema = z.object({
   provider: z.string(),
   model: z.string(),
   filePath: z.string().optional(),
-  attachments: z.array(attachmentSchema).optional()
+  attachments: z.array(attachmentSchema).optional(),
+  quickMode: z.boolean().optional()
 });
 
 export const appendMessageSchema = z.object({
@@ -243,7 +244,8 @@ export const appendMessageSchema = z.object({
   provider: z.string(),
   model: z.string(),
   filePath: z.string().optional(),
-  attachments: z.array(attachmentSchema).optional()
+  attachments: z.array(attachmentSchema).optional(),
+  quickMode: z.boolean().optional()
 });
 
 export const createCommandRunSchema = z.object({

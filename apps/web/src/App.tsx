@@ -577,8 +577,8 @@ export default function App() {
   const [model, setModel] = useState(
     () => localStorage.getItem("gc:model") || "",
   );
-  const [mode, setMode] = useState<"plan" | "build">(
-    () => (localStorage.getItem("gc:mode") as "plan" | "build") || "build",
+  const [mode, setMode] = useState<"plan" | "build" | "quick">(
+    () => (localStorage.getItem("gc:mode") as "plan" | "build" | "quick") || "build",
   );
   const [prompt, setPrompt] = useState("");
   const [attachments, setAttachments] = useState<Array<{ id: string; name: string; mimeType: string; size: number; data: string }>>([]);
@@ -2097,6 +2097,7 @@ export default function App() {
             model,
             filePath: activeFile?.path,
             attachments: currentAttachments,
+            quickMode: mode === "quick",
           }),
         });
         setSessionDetail(payload);
@@ -3442,7 +3443,7 @@ export default function App() {
                             className="dock-dropdown-trigger mode-trigger"
                             type="button"
                             onClick={() => {
-                              const next = mode === "build" ? "plan" : "build";
+                              const next = mode === "build" ? "quick" : mode === "quick" ? "plan" : "build";
                               setMode(next);
                               localStorage.setItem("gc:mode", next);
                               // Auto-select first model for new mode
@@ -3461,7 +3462,7 @@ export default function App() {
                               }
                             }}
                           >
-                            <span>{mode === "build" ? "Build" : "Plan"}</span>
+                            <span>{mode === "build" ? "Build" : mode === "quick" ? "Quick" : "Plan"}</span>
                           </button>
                         </div>
 

@@ -2810,8 +2810,26 @@ type ToolEventCallback = (event: {
   action?: ToolAction;
 }) => void;
 
+/** Parse code blocks from markdown text and extract filenames */
+function parseCodeBlocks(text: string): Array<{ filename: string; content: string }> {
+  const blocks: Array<{ filename: string; content: string }> = [];
+  // Match ```filename\ncontent``` or ```language filename\ncontent```
+  const regex = /```(?:[\w-]+)?\s+([^\n]+)\n([\s\S]*?)```/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const filename = match[1].trim();
+    const content = match[2];
+    // Only include if it looks like a file path
+    if (filename.includes(".") || filename.includes("/")) {
+      blocks.push({ filename, content });
+    }
+  }
+  return blocks;
+}
+
 /** Streaming version of callAI — invokes onToken for each chunk, supports tool execution loop.
- *  When the AI returns tool calls, it executes them and sends results back for another round. */
+ *  When the AI returns tool calls, it executes them and sends results back for another round.
+ *  When quickMode is true, generates code as text in 1 request and parses code blocks to create files. */
 async function callAIStream(
   providerLabel: string,
   uiModel: string,
@@ -2820,7 +2838,8 @@ async function callAIStream(
   fileContext?: string,
   signal?: AbortSignal,
   onToolEvent?: ToolEventCallback,
-  sessionId?: string
+  sessionId?: string,
+  quickMode?: boolean
 ): Promise<StreamResult> {
   const config = resolveProvider(providerLabel);
   if (!config) {
@@ -2851,6 +2870,55 @@ async function callAIStream(
     { role: "system", content: systemContent },
     ...messages
   ];
+
+  // Quick mode: generate code as text (1 request) instead of tool calling (multiple requests)
+  if (quickMode) {
+    logger.info("[ai-stream] Quick mode: generating code as text");
+    
+    // Send request without tools - just generate text
+    let result: StreamResult;
+    if (config.format === "anthropic") {
+      result = await callAnthropicStream(config, apiKey, model, chatMessages, onToken, signal);
+    } else if (config.format === "copilot") {
+      result = await callCopilotStream(config, apiKey, model, chatMessages, onToken, signal);
+    } else if (config.format === "gemini") {
+      result = await callGeminiStream(config, apiKey, model, chatMessages, onToken, signal);
+    } else {
+      result = await callOpenAICompatibleStream(config, apiKey, model, chatMessages, onToken, signal);
+    }
+
+    trackLocalUsage(config.id, result.usage);
+    
+    // Parse code blocks from response and create files
+    const codeBlocks = parseCodeBlocks(result.content);
+    const fileChanges: FileChange[] = [];
+    
+    for (const block of codeBlocks) {
+      try {
+        const filePath = path.resolve(workspaceRoot, block.filename);
+        const dir = path.dirname(filePath);
+        await mkdir(dir, { recursive: true });
+        await writeFile(filePath, block.content, "utf8");
+        fileChanges.push({
+          toolCallId: "quick-mode",
+          filePath: block.filename,
+          linesAdded: block.content.split("\n").length,
+          linesDeleted: 0,
+          previousContent: "",
+          isNewFile: true
+        });
+        logger.info(`[ai-stream] Quick mode: created file ${block.filename}`);
+      } catch (err) {
+        logger.error(`[ai-stream] Quick mode: failed to create ${block.filename}`, err as Record<string, unknown>);
+      }
+    }
+    
+    return { 
+      content: result.content, 
+      usage: result.usage, 
+      fileChanges: fileChanges.length > 0 ? fileChanges : undefined 
+    };
+  }
 
   // Tool execution loop — up to 15 rounds of tool calls
   const MAX_TOOL_ROUNDS = 15;
@@ -3776,7 +3844,7 @@ const server = createServer(async (request, response) => {
             }
           });
         }
-      }, id).then((result) => {
+      }, id, payload.quickMode).then((result) => {
         activeAbortControllers.delete(id);
         if (batchedToolCalls.length > 0) {
           attachMessage(session, "assistant", "", {
@@ -3895,7 +3963,7 @@ const server = createServer(async (request, response) => {
             }
           });
         }
-      }, payload.sessionId).then((result) => {
+      }, payload.sessionId, payload.quickMode).then((result) => {
         activeAbortControllers.delete(session.id);
         // Store ONE assistant message with ALL tool calls (if any)
         if (batchedToolCalls.length > 0) {
