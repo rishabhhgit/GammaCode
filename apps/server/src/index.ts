@@ -1970,7 +1970,7 @@ interface UsageData {
 interface StreamResult {
   content: string;
   usage?: UsageData;
-  toolCalls?: Array<{ id: string; name: string; arguments: string }>;
+  toolCalls?: Array<{ id: string; name: string; arguments: string; thoughtSignature?: string }>;
   fileChanges?: FileChange[];
 }
 
@@ -1982,7 +1982,7 @@ async function parseSSEStream(
   onToken: TokenCallback,
   signal?: AbortSignal,
   extractUsage?: (parsed: Record<string, unknown>) => UsageData | null,
-  extractToolCallDelta?: (parsed: Record<string, unknown>) => { index: number; id?: string; name?: string; arguments?: string } | null
+  extractToolCallDelta?: (parsed: Record<string, unknown>) => { index: number; id?: string; name?: string; arguments?: string; thoughtSignature?: string } | null
 ): Promise<StreamResult> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -1990,7 +1990,7 @@ async function parseSSEStream(
   let fullContent = "";
   let usage: UsageData | undefined;
   // Accumulate tool calls by index
-  const toolCallAccum = new Map<number, { id: string; name: string; arguments: string }>();
+  const toolCallAccum = new Map<number, { id: string; name: string; arguments: string; thoughtSignature?: string }>();
 
   try {
     while (true) {
@@ -2025,11 +2025,13 @@ async function parseSSEStream(
             const existing = toolCallAccum.get(tc.index);
             if (existing) {
               if (tc.arguments) existing.arguments += tc.arguments;
+              if (tc.thoughtSignature) existing.thoughtSignature = tc.thoughtSignature;
             } else {
               toolCallAccum.set(tc.index, {
                 id: tc.id ?? `tool_${tc.index}`,
                 name: tc.name ?? "",
-                arguments: tc.arguments ?? ""
+                arguments: tc.arguments ?? "",
+                thoughtSignature: tc.thoughtSignature
               });
             }
           }
@@ -2153,11 +2155,16 @@ async function callOpenAICompatibleStream(
     // Extract tool call deltas from OpenAI streaming format
     (parsed) => {
       const choices = parsed.choices as Array<{
-        delta?: { tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }> }
+        delta?: { 
+          tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }>;
+          thought_signature?: string;
+        }
       }> | undefined;
       const tc = choices?.[0]?.delta?.tool_calls?.[0];
       if (!tc) return null;
-      return { index: tc.index, id: tc.id, name: tc.function?.name, arguments: tc.function?.arguments };
+      // Gemini OpenAI-compatible returns thought_signature in the delta
+      const thoughtSignature = choices?.[0]?.delta?.thought_signature;
+      return { index: tc.index, id: tc.id, name: tc.function?.name, arguments: tc.function?.arguments, thoughtSignature };
     }
   );
 }
@@ -2814,7 +2821,9 @@ async function callAIStream(
       const assistantToolCalls = uniqueToolCalls.map((tc) => ({
         id: tc.id,
         type: "function" as const,
-        function: { name: tc.name, arguments: tc.arguments }
+        function: { name: tc.name, arguments: tc.arguments },
+        // Gemini 3 requires thought_signature for function calls
+        ...(tc.thoughtSignature ? { thought_signature: tc.thoughtSignature } : {})
       }));
       const assistantMsg: ChatMessage = {
         role: "assistant",
