@@ -570,18 +570,6 @@ async function createWindow() {
       shell.openExternal(url)
     }
   })
-
-  // IPC: native folder picker for workspace switching
-  ipcMain.handle("pick-folder", async () => {
-    const result = await dialog.showOpenDialog(win, {
-      title: "Open Project Folder",
-      properties: ["openDirectory"],
-    })
-    if (result.canceled || result.filePaths.length === 0) {
-      return null
-    }
-    return result.filePaths[0]
-  })
 }
 
 function cleanup() {
@@ -627,6 +615,19 @@ app.whenReady().then(async () => {
     if (url.startsWith("http://") || url.startsWith("https://")) {
       await shell.openExternal(url)
     }
+  })
+
+  // IPC: native folder picker for workspace switching
+  ipcMain.handle("pick-folder", async () => {
+    if (!mainWindow) return null
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "Open Project Folder",
+      properties: ["openDirectory"],
+    })
+    if (result.canceled || result.filePaths.length === 0) {
+      return null
+    }
+    return result.filePaths[0]
   })
 
   // Create application menu
