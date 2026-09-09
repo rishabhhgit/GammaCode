@@ -657,13 +657,13 @@ const providerConfigs: ProviderConfig[] = [
     id: "gemini",
     label: "Google Gemini",
     envKey: "GEMINI_API_KEY",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     defaultModel: "gemini-2.5-flash",
     fallbackModels: [
       "gemini-2.5-flash", "gemini-2.5-pro", "gemini-3.5-flash",
       "gemini-3.1-pro-preview"
     ],
-    format: "gemini"
+    format: "openai"
   },
   {
     id: "ollama",
