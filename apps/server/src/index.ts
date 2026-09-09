@@ -1579,16 +1579,32 @@ async function executeTool(
       if (!absSearchDir.startsWith(workspaceRoot)) return { result: "Error: Path outside workspace", isError: true };
       logger.info(`[tool] grep_search: "${pattern}" in ${searchPath}${include ? ` (${include})` : ""}`);
       try {
-        // Build ripgrep command
-        const rgArgs = ["--line-number", "--color=never", "-n", pattern];
-        if (include) rgArgs.push("--glob", include);
-        rgArgs.push(absSearchDir);
-        const output = execSync(`rg ${rgArgs.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ")}`, {
-          cwd: workspaceRoot,
-          encoding: "utf8",
-          timeout: 15000,
-          maxBuffer: 2 * 1024 * 1024
-        });
+        // Try ripgrep first, fall back to grep -rn
+        let output = "";
+        let usedFallback = false;
+        try {
+          const rgArgs = ["--line-number", "--color=never", "-n", pattern];
+          if (include) rgArgs.push("--glob", include);
+          rgArgs.push(absSearchDir);
+          output = execSync(`rg ${rgArgs.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ")}`, {
+            cwd: workspaceRoot,
+            encoding: "utf8",
+            timeout: 15000,
+            maxBuffer: 2 * 1024 * 1024
+          });
+        } catch {
+          // rg not installed or failed — fall back to grep
+          usedFallback = true;
+          const grepArgs = ["-rn", "-i", pattern];
+          if (include) grepArgs.push("--include", include);
+          grepArgs.push(absSearchDir);
+          output = execSync(`grep ${grepArgs.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ")}`, {
+            cwd: workspaceRoot,
+            encoding: "utf8",
+            timeout: 15000,
+            maxBuffer: 2 * 1024 * 1024
+          });
+        }
         // Make paths relative to workspace
         const relativeOutput = output.replace(new RegExp(absSearchDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), searchPath);
         const lines = relativeOutput.split("\n").filter(Boolean);
