@@ -83,6 +83,14 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   "gemini-2.0-flash-lite": 1000000,
   "gemini-1.5-pro": 2000000,
   "gemini-1.5-flash": 1000000,
+  // Mistral
+  "mistral-small-latest": 32000,
+  "mistral-medium-latest": 32000,
+  "mistral-large-latest": 128000,
+  "codestral-latest": 32000,
+  "open-mistral-nemo": 128000,
+  "open-mixtral-8x22b": 65536,
+  "open-mixtral-8x7b": 32000,
 };
 
 function getModelContextLimit(
@@ -152,6 +160,13 @@ function prettifyModelId(raw: string): string {
     "gemini-2.5-pro": "Gemini 2.5 Pro",
     "gemini-2.5-flash": "Gemini 2.5 Flash",
     "grok-code-fast-1": "Grok Code Fast 1",
+    "mistral-small-latest": "Mistral Small",
+    "mistral-medium-latest": "Mistral Medium",
+    "mistral-large-latest": "Mistral Large",
+    "codestral-latest": "Codestral",
+    "open-mistral-nemo": "Mistral Nemo",
+    "open-mixtral-8x22b": "Mixtral 8x22B",
+    "open-mixtral-8x7b": "Mixtral 8x7B",
   };
   const stripped = raw
     .replace(/-\d{4}-?\d{2}-?\d{2}$/, "")

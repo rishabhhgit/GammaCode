@@ -111,6 +111,13 @@ function prettifyModelId(raw: string): string {
     "gemini-2.5-pro": "Gemini 2.5 Pro",
     "gemini-2.5-flash": "Gemini 2.5 Flash",
     "grok-code-fast-1": "Grok Code Fast 1",
+    "mistral-small-latest": "Mistral Small",
+    "mistral-medium-latest": "Mistral Medium",
+    "mistral-large-latest": "Mistral Large",
+    "codestral-latest": "Codestral",
+    "open-mistral-nemo": "Mistral Nemo",
+    "open-mixtral-8x22b": "Mixtral 8x22B",
+    "open-mixtral-8x7b": "Mixtral 8x7B",
   };
   const stripped = raw
     .replace(/-\d{4}-?\d{2}-?\d{2}$/, "")

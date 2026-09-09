@@ -172,6 +172,14 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   // Gemini 3
   "gemini-3-flash": 1000000,
   "gemini-3.1-pro-preview": 2000000,
+  // Mistral
+  "mistral-small-latest": 32000,
+  "mistral-medium-latest": 32000,
+  "mistral-large-latest": 128000,
+  "codestral-latest": 32000,
+  "open-mistral-nemo": 128000,
+  "open-mixtral-8x22b": 65536,
+  "open-mixtral-8x7b": 32000,
   // Grok
   "grok-2": 131072,
   "grok-beta": 131072,
@@ -318,6 +326,13 @@ function prettifyModelId(raw: string): string {
     "gemini-2.5-pro": "Gemini 2.5 Pro",
     "gemini-2.5-flash": "Gemini 2.5 Flash",
     "grok-code-fast-1": "Grok Code Fast 1",
+    "mistral-small-latest": "Mistral Small",
+    "mistral-medium-latest": "Mistral Medium",
+    "mistral-large-latest": "Mistral Large",
+    "codestral-latest": "Codestral",
+    "open-mistral-nemo": "Mistral Nemo",
+    "open-mixtral-8x22b": "Mixtral 8x22B",
+    "open-mixtral-8x7b": "Mixtral 8x7B",
   };
 
   // Strip date suffixes like -20250514, -2025-04-14
@@ -4265,7 +4280,7 @@ export default function App() {
                 </div>
 
                 {/* API Key providers: OpenAI, Anthropic, OpenRouter */}
-                {(["openai", "anthropic", "openrouter", "gemini"] as const).map(
+                {(["openai", "anthropic", "openrouter", "gemini", "mistral"] as const).map(
                   (providerId) => {
                     const providerInfo = authStatus?.providers.find(
                       (p) => p.id === providerId,

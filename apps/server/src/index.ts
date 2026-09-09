@@ -598,7 +598,7 @@ const providerConfigs: ProviderConfig[] = [
       "claude-sonnet-4.6", "claude-sonnet-4.5", "claude-opus-4.6", "claude-opus-4.5", "claude-haiku-4.5",
       "gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex", "gpt-5", "gpt-5-mini",
       "gpt-4.1", "gpt-4o", "o4-mini", "o3-mini",
-      "gemini-3-flash", "gemini-3.1-pro-preview", "gemini-2.5-pro",
+      "gemini-3-flash", "gemini-3.1-pro-preview",
       "grok-code-fast-1"
     ],
     format: "copilot"
@@ -638,6 +638,19 @@ const providerConfigs: ProviderConfig[] = [
       "anthropic/claude-sonnet-4-20250514",
       "google/gemini-2.5-flash-preview",
       "deepseek/deepseek-chat"
+    ],
+    format: "openai"
+  },
+  {
+    id: "mistral",
+    label: "Mistral",
+    envKey: "MISTRAL_API_KEY",
+    baseUrl: "https://api.mistral.ai/v1",
+    defaultModel: "mistral-small-latest",
+    fallbackModels: [
+      "mistral-small-latest", "mistral-medium-latest", "mistral-large-latest",
+      "codestral-latest", "open-mistral-nemo", "open-mixtral-8x22b",
+      "open-mixtral-8x7b"
     ],
     format: "openai"
   },
@@ -1022,6 +1035,16 @@ async function fetchModelsForProvider(config: ProviderConfig): Promise<string[]>
         .map((m) => m.id)
         .filter((id) => OPENAI_CHAT_PREFIXES.some((p) => id.startsWith(p)))
         .filter((id) => !OPENAI_EXCLUDE_PATTERNS.some((p) => id.includes(p)))
+        .sort();
+    } else if (config.id === "mistral") {
+      const res = await fetch(`${config.baseUrl}/models`, {
+        headers: { Authorization: `Bearer ${apiKey}` }
+      });
+      if (!res.ok) throw new Error(`Mistral /models returned ${res.status}`);
+      const data = (await res.json()) as { data?: Array<{ id: string }> };
+      models = (data.data ?? [])
+        .map((m) => m.id)
+        .filter((id) => !id.includes("embed") && !id.includes("Moderation"))
         .sort();
     } else if (config.format === "anthropic") {
       const res = await fetch(`${config.baseUrl}/models?limit=1000`, {
