@@ -3276,14 +3276,6 @@ const server = createServer(async (request, response) => {
 
     /* ---- Workspace / project management ---- */
 
-    if (request.method === "GET" && request.url === "/api/workspace") {
-      sendJson(response, 200, {
-        root: workspaceRoot,
-        name: path.basename(workspaceRoot),
-      });
-      return;
-    }
-
     if (request.method === "GET" && request.url === "/api/workspace/recent") {
       sendJson(response, 200, { projects: recentProjects });
       return;

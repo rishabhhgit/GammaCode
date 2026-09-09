@@ -39,6 +39,7 @@ export const providerIdSchema = z.enum([
   "anthropic",
   "openai",
   "gemini",
+  "mistral",
   "ollama",
   "custom"
 ]);
