@@ -664,7 +664,7 @@ const providerConfigs: ProviderConfig[] = [
       "gemini-3.5-flash", "gemini-3.5-flash-lite",
       "gemini-3.1-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash"
     ],
-    format: "openai"
+    format: "gemini"
   },
   {
     id: "ollama",
@@ -2204,6 +2204,7 @@ async function callOpenAICompatibleStream(
 
     if (!response.ok) {
       const errorBody = await response.text().catch(() => "");
+      logger.error(`[ai-stream] API error ${response.status}: ${errorBody.slice(0, 1000)}`);
       throw new Error(`HTTP ${response.status}: ${errorBody.slice(0, 500)}`);
     }
 
