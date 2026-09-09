@@ -2076,6 +2076,7 @@ async function callOpenAICompatibleStream(
     headers["X-Title"] = "Gamma Code";
   }
 
+  const toolDefs = buildAiToolsOpenAI();
   const body = JSON.stringify({
     model,
     messages: messages.map((m) => {
@@ -2110,11 +2111,13 @@ async function callOpenAICompatibleStream(
     temperature: 0.2,
     stream: true,
     stream_options: { include_usage: true },
-    tools: buildAiToolsOpenAI(),
+    tools: toolDefs,
     tool_choice: "auto"
   });
 
   logger.info(`[ai-stream] Calling ${config.label} (${model}) at ${url}`);
+  logger.info(`[ai-stream] Tools sent: ${toolDefs.map((t) => t.function.name).join(", ")}`);
+  logger.info(`[ai-stream] Body snippet: ${body.slice(0, 500)}`);
   const response = await fetch(url, { method: "POST", headers, body, signal });
 
   if (!response.ok) {
