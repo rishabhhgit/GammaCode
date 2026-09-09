@@ -2877,9 +2877,7 @@ async function callAIStream(
       const assistantToolCalls = uniqueToolCalls.map((tc) => ({
         id: tc.id,
         type: "function" as const,
-        function: { name: tc.name, arguments: tc.arguments },
-        // Gemini 3 requires thought_signature for function calls
-        ...(tc.thoughtSignature ? { thought_signature: tc.thoughtSignature } : {})
+        function: { name: tc.name, arguments: tc.arguments }
       }));
       const assistantMsg: ChatMessage = {
         role: "assistant",
