@@ -1,0 +1,35 @@
+{
+  // Gamma Code project config (JSONC)
+  "version": 1,
+  "permissions": {
+    "tools": {
+      "run_command": "allow",
+      "write_file": "allow",
+      "edit_file": "allow",
+      "grep_search": "allow",
+      "read_file": "allow",
+      "list_files": "allow"
+    },
+    "plugins": "ask"
+  },
+  "agents": {
+    "enabled": true,
+    "defaultAgent": "build"
+  },
+  "skills": {
+    "enabled": true,
+    "paths": [
+      ".gamma-code/skills"
+    ]
+  },
+  "plugins": {
+    "enabled": true,
+    "directories": [
+      ".gamma-code/plugins"
+    ]
+  },
+  "sharing": {
+    "mode": "manual",
+    "localOnly": true
+  }
+}
