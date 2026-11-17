@@ -39,7 +39,7 @@ const nodeBinPath =
 
 const APP_ID = "com.gammacode.app"
 const CURRENT_VERSION = "0.1.0"
-const UPDATE_REPO = "Thisisaarush/GammaCode"
+const UPDATE_REPO = "rishabhhgit/GammaCode"
 
 let serverProcess: ChildProcess | null = null
 let webProcess: ChildProcess | null = null
