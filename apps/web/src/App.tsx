@@ -61,6 +61,12 @@ import {
   ClipboardPaste,
   Globe,
   Pencil,
+  Cpu,
+  Layers,
+  Radio,
+  Server,
+  ShieldCheck,
+  SlidersHorizontal,
 } from "lucide-react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import {
@@ -340,27 +346,33 @@ function CustomProviderCard({ serverUrl, onError }: { serverUrl: string; onError
   const isConnected = Boolean(baseUrl.trim() && hasApiKey);
 
   return (
-    <div className={`auth-provider-card ${isConnected ? "is-connected" : ""}`}>
+    <div className="auth-provider-card custom-provider-card">
       <div className="auth-provider-header">
         <div className="auth-provider-info">
-          <span className={`auth-status-dot ${isConnected ? "connected" : "disconnected"}`} />
+          <div className="auth-provider-icon-box custom">
+            <Server size={16} />
+          </div>
           <div className="auth-provider-title-wrap">
             <div className="auth-provider-name-row">
-              <strong>Custom OpenAI-Compatible Endpoint</strong>
+              <strong>OpenAI-Compatible Endpoint</strong>
+              <span className="auth-provider-tag">Self-Hosted / Gateway</span>
             </div>
             <span className="auth-provider-desc">
-              Connect DeepSeek, Groq, local Ollama, LM Studio, or any OpenAI-compatible API
+              Connect DeepSeek, Groq, local Ollama, LM Studio, or vLLM endpoints
             </span>
           </div>
         </div>
-        <span className={`auth-method-badge ${isConnected ? "badge-connected" : ""}`}>
-          {isConnected ? "Active" : "Not Set"}
-        </span>
+        <div className="auth-provider-status-badge">
+          <span className={`auth-status-dot ${isConnected ? "connected" : "disconnected"}`} />
+          <span className="auth-status-text">
+            {isConnected ? "Active" : "Not configured"}
+          </span>
+        </div>
       </div>
 
       {/* Preset quick buttons */}
       <div className="custom-presets-row">
-        <span className="custom-presets-label">Quick Presets:</span>
+        <span className="custom-presets-label">Presets:</span>
         {CUSTOM_PRESETS.map((p) => (
           <button
             key={p.name}
@@ -410,7 +422,7 @@ function CustomProviderCard({ serverUrl, onError }: { serverUrl: string; onError
             onKeyDown={(e) => {
               if (e.key === "Enter") void handleSave();
             }}
-            placeholder={hasApiKey ? "•••••••••••• (key currently saved — enter new to replace)" : "API Key (optional for local Ollama/LM Studio)"}
+            placeholder={hasApiKey ? "•••••••••••• (saved — enter new to replace)" : "API Key (optional for local Ollama/LM Studio)"}
             style={{ flex: 1 }}
           />
           {apiKey ? (
@@ -474,7 +486,7 @@ function CustomProviderCard({ serverUrl, onError }: { serverUrl: string; onError
             disabled={saving || !baseUrl.trim()}
           >
             {saving ? <LoaderCircle className="spin" size={12} /> : <Check size={12} />}
-            <span>{saving ? "Saving & Connecting..." : isConnected ? "Update Custom Endpoint" : "Save & Connect Endpoint"}</span>
+            <span>{saving ? "Saving..." : isConnected ? "Update Custom Endpoint" : "Save & Connect Endpoint"}</span>
           </button>
         </div>
       </div>
@@ -570,6 +582,8 @@ export default function App() {
 
   // Auth state
   const [authStatus, setAuthStatus] = useState<AuthStatusResponse | null>(null);
+  const [settingsTab, setSettingsTab] = useState<"providers" | "custom" | "models" | "about">("providers");
+  const [modelFilterQuery, setModelFilterQuery] = useState("");
   const [apiKeyInputs, setApiKeyInputs] = useState<Record<string, string>>({});
   const [apiKeyVisible, setApiKeyVisible] = useState<Record<string, boolean>>({});
   const [editingKey, setEditingKey] = useState<Record<string, boolean>>({});
@@ -4639,523 +4653,567 @@ export default function App() {
             className="overlay-panel settings-overlay"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="overlay-header">
-              <h2>Settings</h2>
-              <button
-                className="overlay-close"
-                type="button"
-                onClick={() => setShowSettings(false)}
-              >
-                <X size={14} />
-              </button>
+            {/* --- Settings Header with Navigation Tabs --- */}
+            <div className="settings-header">
+              <div className="settings-header-top">
+                <div className="settings-title-group">
+                  <h2>Settings</h2>
+                  <p className="settings-subtitle">
+                    Configure AI providers, custom endpoints, and models
+                  </p>
+                </div>
+                <button
+                  className="overlay-close"
+                  type="button"
+                  onClick={() => setShowSettings(false)}
+                  title="Close settings"
+                >
+                  <X size={15} />
+                </button>
+              </div>
+
+              <div className="settings-nav-tabs">
+                <button
+                  className={`settings-nav-tab ${settingsTab === "providers" ? "active" : ""}`}
+                  type="button"
+                  onClick={() => setSettingsTab("providers")}
+                >
+                  <Cpu size={13} />
+                  <span>AI Providers</span>
+                  {(authStatus?.providers ?? []).filter((p) => p.status === "connected").length > 0 ? (
+                    <span className="settings-tab-counter">
+                      {(authStatus?.providers ?? []).filter((p) => p.status === "connected").length}
+                    </span>
+                  ) : null}
+                </button>
+                <button
+                  className={`settings-nav-tab ${settingsTab === "custom" ? "active" : ""}`}
+                  type="button"
+                  onClick={() => setSettingsTab("custom")}
+                >
+                  <Globe size={13} />
+                  <span>Custom Endpoint</span>
+                </button>
+                <button
+                  className={`settings-nav-tab ${settingsTab === "models" ? "active" : ""}`}
+                  type="button"
+                  onClick={() => setSettingsTab("models")}
+                >
+                  <SlidersHorizontal size={13} />
+                  <span>Models</span>
+                </button>
+                <button
+                  className={`settings-nav-tab ${settingsTab === "about" ? "active" : ""}`}
+                  type="button"
+                  onClick={() => setSettingsTab("about")}
+                >
+                  <Info size={13} />
+                  <span>About</span>
+                </button>
+              </div>
             </div>
 
             <div className="overlay-body compact-scroll">
-              {/* --- Provider Auth Section --- */}
-              <div className="overlay-section">
-                <h3 className="overlay-section-title">Providers</h3>
-
-                {/* GitHub Copilot — OAuth Device Flow */}
-                <div className="auth-provider-card">
-                  <div className="auth-provider-header">
-                    <div className="auth-provider-info">
-                      <span
-                        className={`auth-status-dot ${authStatus?.providers.find((p) => p.id === "copilot")?.status === "connected" ? "connected" : "disconnected"}`}
-                      />
-                      <strong>GitHub Copilot</strong>
-                    </div>
-                    <span className="auth-method-badge">
-                      {authStatus?.providers.find((p) => p.id === "copilot")
-                        ?.method === "env"
-                        ? "ENV"
-                        : authStatus?.providers.find((p) => p.id === "copilot")
-                              ?.method === "oauth"
-                          ? "OAuth"
-                          : "—"}
-                    </span>
+              {/* === TAB 1: AI Providers === */}
+              {settingsTab === "providers" ? (
+                <div className="settings-tab-content">
+                  <div className="settings-section-heading">
+                    <h3>Supported AI Providers</h3>
+                    <p>API keys are securely stored locally or loaded from your project environment (.env).</p>
                   </div>
 
-                  {authStatus?.providers.find((p) => p.id === "copilot")
-                    ?.status === "connected" ? (
-                    <div className="auth-connected-row">
-                      <span className="auth-connected-label">
-                        <Check size={12} />
-                        Connected
-                      </span>
-                      {authStatus?.providers.find((p) => p.id === "copilot")
-                        ?.method === "oauth" ? (
-                        <button
-                          className="auth-remove-btn"
-                          type="button"
-                          onClick={() => {
-                            void removeApiKey("copilot-oauth");
-                          }}
-                          disabled={removingKey === "copilot-oauth"}
-                        >
-                          <LogOut size={12} />
-                          <span>Logout</span>
-                        </button>
-                      ) : null}
-                    </div>
-                  ) : githubDevice ? (
-                    <div className="github-device-flow">
-                      <p className="device-flow-instruction">
-                        Go to{" "}
-                        <a
-                          href={githubDevice.verificationUri}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          {githubDevice.verificationUri}{" "}
-                          <ExternalLink size={11} />
-                        </a>{" "}
-                        and enter the code:
-                      </p>
-                      <div className="device-code-display">
-                        <code>{githubDevice.userCode}</code>
-                        <button
-                          className="copy-code-btn"
-                          type="button"
-                          onClick={() => copyToClipboard(githubDevice.userCode)}
-                        >
-                          {copiedCode ? (
-                            <Check size={12} />
-                          ) : (
-                            <Copy size={12} />
-                          )}
-                        </button>
-                      </div>
-                      {githubPolling ? (
-                        <div className="device-flow-polling">
-                          <LoaderCircle className="spin" size={13} />
-                          <span>Waiting for authorization...</span>
-                        </div>
-                      ) : null}
-                      <button
-                        className="auth-text-btn"
-                        type="button"
-                        onClick={() => {
-                          setGithubPolling(false);
-                          setGithubDevice(null);
-                        }}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="auth-btn-group">
-                      <button
-                        className="auth-login-btn"
-                        type="button"
-                        onClick={() => void startGitHubLogin()}
-                        disabled={githubStarting}
-                      >
-                        {githubStarting ? (
-                          <LoaderCircle className="spin" size={13} />
-                        ) : (
-                          <LogIn size={13} />
-                        )}
-                        <span>
-                          {githubStarting ? "Starting..." : "Login with GitHub"}
-                        </span>
-                      </button>
-                      <p className="auth-helper-text">
-                        Requires a GitHub Copilot subscription
-                      </p>
-                    </div>
-                  )}
-                </div>
+                  <div className="auth-providers-list">
+                    {/* GitHub Copilot — OAuth Device Flow */}
+                    {(() => {
+                      const copilot = authStatus?.providers.find((p) => p.id === "copilot");
+                      const isConnected = copilot?.status === "connected";
+                      const method = copilot?.method ?? "none";
 
-                {/* API Key providers: OpenAI, Anthropic, Gemini, OpenRouter, Mistral */}
-                {(["openai", "anthropic", "gemini", "openrouter", "mistral"] as const).map(
-                  (providerId) => {
-                    const info = PROVIDER_INFO[providerId] || {
-                      name: providerId,
-                      description: "AI model provider",
-                      keyPlaceholder: `Paste ${providerId} API key`,
-                      getKeyUrl: "https://platform.openai.com",
-                    };
-                    const providerInfo = authStatus?.providers.find(
-                      (p) => p.id === providerId,
-                    );
-                    const isConnected = providerInfo?.status === "connected";
-                    const method = providerInfo?.method ?? "none";
-                    const isEditing = editingKey[providerId] ?? false;
-                    const keyInput = apiKeyInputs[providerId] ?? "";
-                    const isVisible = apiKeyVisible[providerId] ?? false;
-
-                    return (
-                      <div
-                        key={providerId}
-                        className={`auth-provider-card ${isConnected ? "is-connected" : ""}`}
-                      >
-                        <div className="auth-provider-header">
-                          <div className="auth-provider-info">
-                            <span
-                              className={`auth-status-dot ${isConnected ? "connected" : "disconnected"}`}
-                            />
-                            <div className="auth-provider-title-wrap">
-                              <div className="auth-provider-name-row">
-                                <strong>{info.name}</strong>
-                                {info.tag ? (
-                                  <span className="auth-provider-tag">{info.tag}</span>
-                                ) : null}
+                      return (
+                        <div key="copilot" className="auth-provider-card">
+                          <div className="auth-provider-header">
+                            <div className="auth-provider-info">
+                              <div className="auth-provider-icon-box copilot">
+                                <FolderGit2 size={16} />
                               </div>
-                              <span className="auth-provider-desc">
-                                {info.description}
+                              <div className="auth-provider-title-wrap">
+                                <div className="auth-provider-name-row">
+                                  <strong>GitHub Copilot</strong>
+                                  <span className="auth-provider-tag">OAuth</span>
+                                </div>
+                                <span className="auth-provider-desc">
+                                  Claude 3.5 Sonnet, GPT-4o, and o1 via your GitHub subscription
+                                </span>
+                              </div>
+                            </div>
+                            <div className="auth-provider-status-badge">
+                              <span className={`auth-status-dot ${isConnected ? "connected" : "disconnected"}`} />
+                              <span className="auth-status-text">
+                                {isConnected ? (method === "env" ? "via .env" : "Connected") : "Not configured"}
                               </span>
                             </div>
                           </div>
-                          <div className="auth-provider-actions-top">
-                            <span
-                              className={`auth-method-badge ${isConnected ? "badge-connected" : ""}`}
-                            >
-                              {method === "env"
-                                ? "ENV (.env)"
-                                : method === "stored_key"
-                                  ? "Saved Key"
-                                  : "Not Set"}
-                            </span>
-                            <a
-                              href={info.getKeyUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="auth-get-key-link"
-                              title={`Get ${info.name} API Key`}
-                            >
-                              <span>Get Key</span>
-                              <ExternalLink size={10} />
-                            </a>
-                          </div>
-                        </div>
 
-                        {isConnected && !isEditing ? (
-                          <div className="auth-connected-row">
-                            <div className="auth-key-preview">
-                              <Key size={12} className="auth-key-preview-icon" />
-                              <span className="auth-masked-key">
-                                ••••••••••••••••••••••••
-                              </span>
-                              <span className="auth-connected-pill">
-                                <CheckCircle2 size={11} />
-                                <span>Active</span>
-                              </span>
-                            </div>
-                            <div className="auth-btn-row">
-                              <button
-                                className="auth-action-btn auth-edit-btn"
-                                type="button"
-                                onClick={() => {
-                                  setEditingKey((prev) => ({
-                                    ...prev,
-                                    [providerId]: true,
-                                  }));
-                                  setApiKeyInputs((prev) => ({
-                                    ...prev,
-                                    [providerId]: "",
-                                  }));
-                                }}
-                                title="Change or update API key"
-                              >
-                                <Pencil size={11} />
-                                <span>Update</span>
-                              </button>
-                              {method === "stored_key" ? (
+                          {isConnected ? (
+                            <div className="auth-connected-row">
+                              <div className="auth-key-preview">
+                                <ShieldCheck size={14} className="auth-key-preview-icon" style={{ color: "#22c55e" }} />
+                                <span className="auth-connected-text">Authenticated via GitHub account</span>
+                              </div>
+                              {method === "oauth" ? (
                                 <button
                                   className="auth-action-btn auth-remove-btn"
                                   type="button"
-                                  onClick={() => void removeApiKey(providerId)}
-                                  disabled={removingKey === providerId}
-                                  title="Remove stored API key"
+                                  onClick={() => void removeApiKey("copilot-oauth")}
+                                  disabled={removingKey === "copilot-oauth"}
+                                  title="Sign out of GitHub Copilot"
                                 >
-                                  <Trash2 size={11} />
-                                  <span>
-                                    {removingKey === providerId
-                                      ? "..."
-                                      : "Remove"}
-                                  </span>
+                                  <LogOut size={11} />
+                                  <span>{removingKey === "copilot-oauth" ? "Signing out..." : "Sign Out"}</span>
                                 </button>
                               ) : null}
                             </div>
-                          </div>
-                        ) : (
-                          <div className="auth-key-input-container">
-                            <div className="auth-key-input-wrap">
-                              <Key size={13} className="auth-key-icon" />
-                              <input
-                                type={isVisible ? "text" : "password"}
-                                value={keyInput}
-                                onChange={(e) =>
-                                  setApiKeyInputs((current) => ({
-                                    ...current,
-                                    [providerId]: e.target.value,
-                                  }))
-                                }
-                                onKeyDown={(e) => {
-                                  if (
-                                    e.key === "Enter" &&
-                                    keyInput.trim() &&
-                                    savingKey !== providerId
-                                  ) {
-                                    void saveApiKey(providerId, keyInput);
-                                  }
+                          ) : githubDevice ? (
+                            <div className="github-device-flow">
+                              <p className="device-flow-instruction">
+                                Go to{" "}
+                                <a
+                                  href={githubDevice.verificationUri}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
+                                  {githubDevice.verificationUri}{" "}
+                                  <ExternalLink size={11} />
+                                </a>{" "}
+                                and enter this code:
+                              </p>
+                              <div className="device-code-display">
+                                <code>{githubDevice.userCode}</code>
+                                <button
+                                  className="copy-code-btn"
+                                  type="button"
+                                  onClick={() => copyToClipboard(githubDevice.userCode)}
+                                  title="Copy code"
+                                >
+                                  {copiedCode ? <Check size={12} /> : <Copy size={12} />}
+                                </button>
+                              </div>
+                              {githubPolling ? (
+                                <div className="device-flow-polling">
+                                  <LoaderCircle className="spin" size={13} />
+                                  <span>Waiting for GitHub authorization...</span>
+                                </div>
+                              ) : null}
+                              <button
+                                className="auth-text-btn"
+                                type="button"
+                                onClick={() => {
+                                  setGithubPolling(false);
+                                  setGithubDevice(null);
                                 }}
-                                placeholder={info.keyPlaceholder}
-                                autoFocus={isEditing}
-                              />
-                              {keyInput ? (
-                                <button
-                                  className="auth-input-action-btn"
-                                  type="button"
-                                  onClick={() =>
-                                    setApiKeyInputs((current) => ({
-                                      ...current,
-                                      [providerId]: "",
-                                    }))
-                                  }
-                                  title="Clear input"
-                                >
-                                  <X size={12} />
-                                </button>
-                              ) : (
-                                <button
-                                  className="auth-input-action-btn"
-                                  type="button"
-                                  onClick={() =>
-                                    void handlePasteApiKey(providerId)
-                                  }
-                                  title="Paste from clipboard"
-                                >
-                                  <ClipboardPaste size={12} />
-                                </button>
-                              )}
-                              <button
-                                className="auth-input-action-btn"
-                                type="button"
-                                onClick={() =>
-                                  setApiKeyVisible((current) => ({
-                                    ...current,
-                                    [providerId]: !isVisible,
-                                  }))
-                                }
-                                title={
-                                  isVisible ? "Hide API key" : "Show API key"
-                                }
                               >
-                                {isVisible ? (
-                                  <EyeOff size={12} />
-                                ) : (
-                                  <Eye size={12} />
-                                )}
+                                Cancel
                               </button>
                             </div>
-
-                            <div className="auth-input-buttons">
-                              {isEditing ? (
-                                <button
-                                  className="auth-cancel-btn"
-                                  type="button"
-                                  onClick={() => {
-                                    setEditingKey((prev) => ({
-                                      ...prev,
-                                      [providerId]: false,
-                                    }));
-                                    setApiKeyInputs((prev) => ({
-                                      ...prev,
-                                      [providerId]: "",
-                                    }));
-                                  }}
-                                >
-                                  Cancel
-                                </button>
-                              ) : null}
+                          ) : (
+                            <div className="auth-card-actions">
                               <button
-                                className="auth-save-btn"
+                                className="auth-login-btn"
                                 type="button"
-                                onClick={() =>
-                                  void saveApiKey(providerId, keyInput)
-                                }
-                                disabled={
-                                  !keyInput.trim() || savingKey === providerId
-                                }
+                                onClick={() => void startGitHubLogin()}
+                                disabled={githubStarting}
                               >
-                                {savingKey === providerId ? (
-                                  <LoaderCircle className="spin" size={12} />
+                                {githubStarting ? (
+                                  <LoaderCircle className="spin" size={13} />
                                 ) : (
-                                  <Check size={12} />
+                                  <LogIn size={13} />
                                 )}
-                                <span>
-                                  {savingKey === providerId
-                                    ? "Saving..."
-                                    : isEditing
-                                      ? "Update Key"
-                                      : "Save Key"}
-                                </span>
+                                <span>{githubStarting ? "Starting..." : "Sign in with GitHub"}</span>
                               </button>
                             </div>
-                          </div>
-                        )}
+                          )}
+                        </div>
+                      );
+                    })()}
 
-                        {keySavedToast === providerId ? (
-                          <div className="auth-toast-success">
-                            <CheckCircle2 size={12} />
-                            <span>Key saved and verified active!</span>
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  },
-                )}
-              </div>
+                    {/* Standard API Key Providers */}
+                    {(["openai", "anthropic", "gemini", "openrouter", "mistral"] as const).map(
+                      (providerId) => {
+                        const info = PROVIDER_INFO[providerId] || {
+                          name: providerId,
+                          description: "AI model provider",
+                          keyPlaceholder: `Paste ${providerId} API key`,
+                          getKeyUrl: "https://platform.openai.com",
+                        };
+                        const providerInfo = authStatus?.providers.find((p) => p.id === providerId);
+                        const isConnected = providerInfo?.status === "connected";
+                        const method = providerInfo?.method ?? "none";
+                        const isEditing = editingKey[providerId] ?? false;
+                        const keyInput = apiKeyInputs[providerId] ?? "";
+                        const isVisible = apiKeyVisible[providerId] ?? false;
 
-              {/* --- Custom Provider Section --- */}
-              <div className="overlay-section">
-                <h3 className="overlay-section-title">Custom Provider</h3>
-                <p className="overlay-section-desc">
-                  Connect any OpenAI-compatible API endpoint.
-                </p>
-                <CustomProviderCard
-                  serverUrl={serverUrl}
-                  onError={setError}
-                />
-              </div>
-
-              {/* --- Model Toggles Section --- */}
-              <div className="overlay-section">
-                <h3 className="overlay-section-title">Models</h3>
-                <p className="overlay-section-desc">
-                  Enable or disable models. Only enabled models appear in the
-                  dropdown.
-                </p>
-
-                {/* Grouped model list by provider - only show connected providers */}
-                {(snapshot?.providers ?? []).filter(
-                  (p) => p.status === "connected",
-                ).length === 0 ? (
-                  <p
-                    className="overlay-section-desc"
-                    style={{ color: "var(--text-weak)", fontStyle: "italic" }}
-                  >
-                    Connect a provider above to see available models.
-                  </p>
-                ) : (
-                  <div className="models-categorized">
-                    {(snapshot?.providers ?? [])
-                      .filter((p) => p.status === "connected")
-                      .map((prov) => (
-                        <div key={prov.id} className="models-category">
-                          <div className="models-category-header">
-                            <span
-                              className={`auth-status-dot ${prov.status === "connected" ? "connected" : "disconnected"}`}
-                            />
-                            <strong>{prov.label}</strong>
-                            <span className="models-count">
-                              {
-                                (prov.models ?? []).filter(
-                                  (m) => !disabledModels[m],
-                                ).length
-                              }{" "}
-                              / {prov.models?.length ?? 0}
-                            </span>
-                          </div>
-                          <div className="models-category-list">
-                            {(prov.models ?? []).map((m) => {
-                              const isOff = disabledModels[m] === true;
-                              const contextLabel = getModelContextLabel(
-                                m,
-                                modelContextLimits,
-                              );
-                              return (
-                                <label key={m} className="model-toggle-item">
-                                  <input
-                                    type="checkbox"
-                                    checked={!isOff}
-                                    onChange={() =>
-                                      setDisabledModels((prev) => {
-                                        const next = { ...prev };
-                                        if (isOff) {
-                                          delete next[m];
-                                        } else {
-                                          next[m] = true;
-                                        }
-                                        return next;
-                                      })
-                                    }
-                                  />
-                                  <span className="model-name">
-                                    {prettifyModelId(m)}
-                                  </span>
-                                  {contextLabel && (
-                                    <span className="model-context">
-                                      {contextLabel}
-                                    </span>
+                        return (
+                          <div key={providerId} className="auth-provider-card">
+                            <div className="auth-provider-header">
+                              <div className="auth-provider-info">
+                                <div className={`auth-provider-icon-box ${providerId}`}>
+                                  {providerId === "openai" ? (
+                                    <Sparkles size={16} />
+                                  ) : providerId === "anthropic" ? (
+                                    <Zap size={16} />
+                                  ) : providerId === "gemini" ? (
+                                    <Cpu size={16} />
+                                  ) : providerId === "openrouter" ? (
+                                    <Layers size={16} />
+                                  ) : (
+                                    <Radio size={16} />
                                   )}
-                                </label>
-                              );
-                            })}
+                                </div>
+                                <div className="auth-provider-title-wrap">
+                                  <div className="auth-provider-name-row">
+                                    <strong>{info.name}</strong>
+                                    {info.tag ? (
+                                      <span className="auth-provider-tag">{info.tag}</span>
+                                    ) : null}
+                                  </div>
+                                  <span className="auth-provider-desc">{info.description}</span>
+                                </div>
+                              </div>
+
+                              <div className="auth-provider-status-badge">
+                                <span className={`auth-status-dot ${isConnected ? "connected" : "disconnected"}`} />
+                                <span className="auth-status-text">
+                                  {isConnected
+                                    ? method === "env"
+                                      ? "via .env"
+                                      : "Connected"
+                                    : "Not configured"}
+                                </span>
+                              </div>
+                            </div>
+
+                            {isConnected && !isEditing ? (
+                              <div className="auth-connected-row">
+                                <div className="auth-key-preview">
+                                  <Key size={13} className="auth-key-preview-icon" />
+                                  <span className="auth-masked-key">••••••••••••••••</span>
+                                </div>
+                                <div className="auth-btn-row">
+                                  <button
+                                    className="auth-action-btn auth-edit-btn"
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingKey((prev) => ({ ...prev, [providerId]: true }));
+                                      setApiKeyInputs((prev) => ({ ...prev, [providerId]: "" }));
+                                    }}
+                                    title="Change or replace API key"
+                                  >
+                                    <Pencil size={11} />
+                                    <span>Change</span>
+                                  </button>
+                                  {method === "stored_key" ? (
+                                    <button
+                                      className="auth-action-btn auth-remove-btn"
+                                      type="button"
+                                      onClick={() => void removeApiKey(providerId)}
+                                      disabled={removingKey === providerId}
+                                      title="Remove saved API key"
+                                    >
+                                      <Trash2 size={11} />
+                                      <span>{removingKey === providerId ? "..." : "Remove"}</span>
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="auth-input-flow">
+                                <div className="auth-key-input-container">
+                                  <div className="auth-key-input-wrap">
+                                    <Key size={13} className="auth-key-icon" />
+                                    <input
+                                      type={isVisible ? "text" : "password"}
+                                      value={keyInput}
+                                      onChange={(e) =>
+                                        setApiKeyInputs((current) => ({
+                                          ...current,
+                                          [providerId]: e.target.value,
+                                        }))
+                                      }
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter" && keyInput.trim() && savingKey !== providerId) {
+                                          void saveApiKey(providerId, keyInput);
+                                        }
+                                      }}
+                                      placeholder={info.keyPlaceholder}
+                                      autoFocus={isEditing}
+                                    />
+                                    {keyInput ? (
+                                      <button
+                                        className="auth-input-action-btn"
+                                        type="button"
+                                        onClick={() =>
+                                          setApiKeyInputs((current) => ({ ...current, [providerId]: "" }))
+                                        }
+                                        title="Clear input"
+                                      >
+                                        <X size={12} />
+                                      </button>
+                                    ) : (
+                                      <button
+                                        className="auth-input-action-btn"
+                                        type="button"
+                                        onClick={() => void handlePasteApiKey(providerId)}
+                                        title="Paste from clipboard"
+                                      >
+                                        <ClipboardPaste size={12} />
+                                      </button>
+                                    )}
+                                    <button
+                                      className="auth-input-action-btn"
+                                      type="button"
+                                      onClick={() =>
+                                        setApiKeyVisible((current) => ({
+                                          ...current,
+                                          [providerId]: !isVisible,
+                                        }))
+                                      }
+                                      title={isVisible ? "Hide API key" : "Show API key"}
+                                    >
+                                      {isVisible ? <EyeOff size={12} /> : <Eye size={12} />}
+                                    </button>
+                                  </div>
+
+                                  <div className="auth-input-buttons">
+                                    {isEditing ? (
+                                      <button
+                                        className="auth-cancel-btn"
+                                        type="button"
+                                        onClick={() => {
+                                          setEditingKey((prev) => ({ ...prev, [providerId]: false }));
+                                          setApiKeyInputs((prev) => ({ ...prev, [providerId]: "" }));
+                                        }}
+                                      >
+                                        Cancel
+                                      </button>
+                                    ) : null}
+                                    <button
+                                      className="auth-save-btn"
+                                      type="button"
+                                      onClick={() => void saveApiKey(providerId, keyInput)}
+                                      disabled={!keyInput.trim() || savingKey === providerId}
+                                    >
+                                      {savingKey === providerId ? (
+                                        <LoaderCircle className="spin" size={12} />
+                                      ) : (
+                                        <Check size={12} />
+                                      )}
+                                      <span>{savingKey === providerId ? "Saving..." : isEditing ? "Update Key" : "Save Key"}</span>
+                                    </button>
+                                  </div>
+                                </div>
+
+                                <div className="auth-card-footer">
+                                  <span className="auth-footer-prompt">Need an API key?</span>
+                                  <a
+                                    href={info.getKeyUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="auth-footer-link"
+                                  >
+                                    <span>Get key from {info.name}</span>
+                                    <ExternalLink size={10} />
+                                  </a>
+                                </div>
+                              </div>
+                            )}
+
+                            {keySavedToast === providerId ? (
+                              <div className="auth-toast-success">
+                                <CheckCircle2 size={12} />
+                                <span>Key verified and active!</span>
+                              </div>
+                            ) : null}
                           </div>
-                        </div>
-                      ))}
-                  </div>
-                )}
-              </div>
-
-              {/* --- About Section --- */}
-              <div className="overlay-section">
-                <h3 className="overlay-section-title">About</h3>
-                <div className="about-card">
-                  <div className="about-header">
-                    <div className="about-title-row">
-                      <div className="about-logo-badge">
-                        <Sparkles size={16} />
-                      </div>
-                      <div>
-                        <div className="about-app-name">{APP_NAME}</div>
-                        <div className="about-tagline">
-                          Open-source, local-first AI code editor
-                        </div>
-                      </div>
-                    </div>
-                    <span className="about-version-badge">v{APP_VERSION}</span>
-                  </div>
-
-                  <p className="about-description">
-                    Gamma Code provides a self-hosted, privacy-first engineering environment. All workspace file operations, tool executions, and shell tasks run entirely on your local machine with strict permission gating and instant rollback checkpoints.
-                  </p>
-
-                  <div className="about-features-grid">
-                    <div className="about-feature-item">
-                      <Bot size={13} className="about-feature-icon" />
-                      <span>Multi-Provider AI (Copilot, Claude, GPT, Gemini, Ollama)</span>
-                    </div>
-                    <div className="about-feature-item">
-                      <Terminal size={13} className="about-feature-icon" />
-                      <span>Real PTY Terminal (xterm.js + node-pty)</span>
-                    </div>
-                    <div className="about-feature-item">
-                      <Wrench size={13} className="about-feature-icon" />
-                      <span>Autonomous Tool Loop with Sandboxed Controls</span>
-                    </div>
-                    <div className="about-feature-item">
-                      <GitBranch size={13} className="about-feature-icon" />
-                      <span>Native Git Branches, Diffs & Session Rollback</span>
-                    </div>
-                  </div>
-
-                  <div className="about-footer">
-                    <a
-                      href={REPO_URL}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="about-github-link"
-                    >
-                      <ExternalLink size={12} />
-                      <span>View Repository on GitHub</span>
-                    </a>
-                    <span className="about-license-badge">MIT License</span>
+                        );
+                      },
+                    )}
                   </div>
                 </div>
-              </div>
+              ) : null}
+
+              {/* === TAB 2: Custom Provider === */}
+              {settingsTab === "custom" ? (
+                <div className="settings-tab-content">
+                  <div className="settings-section-heading">
+                    <h3>Custom OpenAI-Compatible Endpoint</h3>
+                    <p>Connect any locally hosted model (Ollama, LM Studio, vLLM) or private OpenAI-compatible cloud proxy.</p>
+                  </div>
+                  <CustomProviderCard serverUrl={serverUrl} onError={setError} />
+                </div>
+              ) : null}
+
+              {/* === TAB 3: Models === */}
+              {settingsTab === "models" ? (
+                <div className="settings-tab-content">
+                  <div className="settings-section-heading">
+                    <h3>Model Selector Preferences</h3>
+                    <p>Only enabled models appear in your prompt model selector dropdown.</p>
+                  </div>
+
+                  {(snapshot?.providers ?? []).filter((p) => p.status === "connected").length === 0 ? (
+                    <div className="models-empty-state">
+                      <Cpu size={32} className="models-empty-icon" />
+                      <h4>No Connected Providers</h4>
+                      <p>Connect an AI provider in the AI Providers tab to view and manage available models.</p>
+                      <button
+                        type="button"
+                        className="auth-save-btn"
+                        style={{ marginTop: "10px" }}
+                        onClick={() => setSettingsTab("providers")}
+                      >
+                        Configure Providers
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="models-categorized">
+                      {/* Search / Filter input */}
+                      <div className="models-search-row">
+                        <Search size={13} className="models-search-icon" />
+                        <input
+                          type="text"
+                          placeholder="Search models..."
+                          value={modelFilterQuery}
+                          onChange={(e) => setModelFilterQuery(e.target.value)}
+                          className="models-search-input"
+                        />
+                        {modelFilterQuery ? (
+                          <button
+                            type="button"
+                            className="models-search-clear"
+                            onClick={() => setModelFilterQuery("")}
+                            title="Clear search"
+                          >
+                            <X size={12} />
+                          </button>
+                        ) : null}
+                      </div>
+
+                      {(snapshot?.providers ?? [])
+                        .filter((p) => p.status === "connected")
+                        .map((prov) => {
+                          const filteredModels = (prov.models ?? []).filter((m) =>
+                            modelFilterQuery ? m.toLowerCase().includes(modelFilterQuery.toLowerCase()) : true
+                          );
+                          if (modelFilterQuery && filteredModels.length === 0) return null;
+
+                          const enabledCount = (prov.models ?? []).filter((m) => !disabledModels[m]).length;
+
+                          return (
+                            <div key={prov.id} className="models-category">
+                              <div className="models-category-header">
+                                <div className="models-category-title-wrap">
+                                  <span className="auth-status-dot connected" />
+                                  <strong>{prov.label}</strong>
+                                </div>
+                                <span className="models-count-badge">
+                                  {enabledCount} / {prov.models?.length ?? 0} enabled
+                                </span>
+                              </div>
+
+                              <div className="models-category-list">
+                                {filteredModels.map((m) => {
+                                  const isOff = disabledModels[m] === true;
+                                  const contextLabel = getModelContextLabel(m, modelContextLimits);
+                                  return (
+                                    <label key={m} className={`model-toggle-item ${!isOff ? "is-enabled" : ""}`}>
+                                      <input
+                                        type="checkbox"
+                                        checked={!isOff}
+                                        onChange={() =>
+                                          setDisabledModels((prev) => {
+                                            const next = { ...prev };
+                                            if (isOff) {
+                                              delete next[m];
+                                            } else {
+                                              next[m] = true;
+                                            }
+                                            return next;
+                                          })
+                                        }
+                                      />
+                                      <span className="model-name">{prettifyModelId(m)}</span>
+                                      {contextLabel ? (
+                                        <span className="model-context">{contextLabel}</span>
+                                      ) : null}
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
+              {/* === TAB 4: About === */}
+              {settingsTab === "about" ? (
+                <div className="settings-tab-content">
+                  <div className="about-card">
+                    <div className="about-header">
+                      <div className="about-title-row">
+                        <div className="about-logo-badge">
+                          <Sparkles size={16} />
+                        </div>
+                        <div>
+                          <div className="about-app-name">{APP_NAME}</div>
+                          <div className="about-tagline">
+                            Open-source, local-first AI code editor
+                          </div>
+                        </div>
+                      </div>
+                      <span className="about-version-badge">v{APP_VERSION}</span>
+                    </div>
+
+                    <p className="about-description">
+                      Gamma Code provides a self-hosted, privacy-first engineering environment. All workspace file operations, tool executions, and shell tasks run entirely on your local machine with strict permission gating and instant rollback checkpoints.
+                    </p>
+
+                    <div className="about-features-grid">
+                      <div className="about-feature-item">
+                        <Bot size={13} className="about-feature-icon" />
+                        <span>Multi-Provider AI (Copilot, Claude, GPT, Gemini, Ollama)</span>
+                      </div>
+                      <div className="about-feature-item">
+                        <Terminal size={13} className="about-feature-icon" />
+                        <span>Real PTY Terminal (xterm.js + node-pty)</span>
+                      </div>
+                      <div className="about-feature-item">
+                        <Wrench size={13} className="about-feature-icon" />
+                        <span>Autonomous Tool Loop with Sandboxed Controls</span>
+                      </div>
+                      <div className="about-feature-item">
+                        <GitBranch size={13} className="about-feature-icon" />
+                        <span>Native Git Branches, Diffs & Session Rollback</span>
+                      </div>
+                    </div>
+
+                    <div className="about-footer">
+                      <a
+                        href={REPO_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="about-github-link"
+                      >
+                        <ExternalLink size={12} />
+                        <span>View Repository on GitHub</span>
+                      </a>
+                      <span className="about-license-badge">MIT License</span>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
