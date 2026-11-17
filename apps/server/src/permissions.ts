@@ -2,13 +2,13 @@ import type { AppConfig, PermissionLevel } from "@gamma-code/shared";
 
 export type ToolAction = "run_command" | "read_file" | "list_files" | "write_file" | "grep_search" | "edit_file";
 
-const DEFAULT_TOOL_PERMISSIONS: Record<ToolAction, PermissionLevel> = {
+export const DEFAULT_TOOL_PERMISSIONS: Record<ToolAction, PermissionLevel> = {
   run_command: "ask",
-  write_file: "ask",
+  write_file: "allow",
   read_file: "allow",
   list_files: "allow",
   grep_search: "allow",
-  edit_file: "ask"
+  edit_file: "allow"
 };
 
 export function getToolPermission(config: AppConfig | null, action: ToolAction): PermissionLevel {

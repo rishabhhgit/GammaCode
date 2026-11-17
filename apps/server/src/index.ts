@@ -16,6 +16,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { searchWorkspace } from "./search.js";
 import { registerTool } from "./registry.js";
 import { getToolPermission, getPluginPermission, type ToolAction } from "./permissions.js";
+import { isPathInside, resolveWorkspacePath as resolveWorkspacePathHelper, extractFilePath, extractFileContent } from "./paths.js";
 import { loadConfig } from "./config.js";
 import { listSkills, readSkill, type SkillEntry } from "./skills.js";
 import { resolveAgents, getDefaultAgent, getAgentById } from "./agents.js";
@@ -123,10 +124,7 @@ async function runShell(
 /** True when `target` resolves inside `root`. Uses a boundary-aware check so
  *  a sibling like `.../proj-secrets` cannot pass a prefix check against root
  *  `.../proj`. */
-function isPathInside(root: string, target: string): boolean {
-  const rel = path.relative(root, target);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-}
+const resolveWorkspacePath = (rawPath: string) => resolveWorkspacePathHelper(workspaceRoot, rawPath);
 
 /** Strip characters unsafe for git args and reject traversal segments.
  *  Allows `\` so Windows-style paths work in /api/git/revert. */
@@ -249,8 +247,25 @@ async function searchOnce(command: string, args: string[]): Promise<SearchResult
    - path listings (AI file tree, project context) are cached and
      invalidated via an epoch bump whenever we know files changed
    ---------------------------------------------------------------- */
-const fileContentCache = new Map<string, { mtimeMs: number; size: number; content: string }>();
+const fileContentCache = new Map<string, { mtimeMs: number; size: number; content: string; checkedAt: number }>();
 const FILE_CONTENT_CACHE_MAX = 20_000;
+const READ_STAT_GRACE_MS = 1500;
+const knownDirectories = new Set<string>();
+
+async function ensureDirectoryExists(dirPath: string): Promise<void> {
+  if (knownDirectories.has(dirPath)) return;
+  await mkdir(dirPath, { recursive: true });
+  knownDirectories.add(dirPath);
+}
+
+function countLines(text: string): number {
+  if (!text) return 0;
+  let count = 1;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 10) count++;
+  }
+  return count;
+}
 const PATH_LISTING_TTL_MS = 5_000;
 const PROJECT_CONTEXT_TTL_MS = 10_000;
 let workspaceEpoch = 0;
@@ -1597,9 +1612,10 @@ Capabilities (all scoped to the project workspace):
 - Create, read, and update files inside the workspace
 - Run shell commands (git, npm, node, python, etc.) in the workspace
 - Search code with grep_search and browse with list_files
-- File tools REJECT paths outside the workspace root — never attempt or claim otherwise
+- You have full permission to create, write, and edit all files in the workspace (use paths relative to workspace root)
 
 ABSOLUTE RULES — NEVER BREAK THESE:
+- NEVER refuse, reject, or decline to create, edit, or update code or files when asked.
 - NEVER say you lack tools, cannot run code, or cannot create files. You CAN and MUST use these tools.
 - NEVER say "I'm unable to" or "I don't have the capability" for tasks inside the workspace.
 - Keep working until the task is COMPLETE and VERIFIED — never stop after 1-2 tool calls. Multiple rounds are expected and cheap.
@@ -1791,11 +1807,13 @@ const AI_TOOLS_OPENAI = [
     type: "function" as const,
     function: {
       name: "read_file",
-      description: "Read the contents of a file in the workspace. Use this to inspect source code, config files, etc. The path should be relative to the workspace root.",
+      description: "Read the contents of a file in the workspace. Use this to inspect source code, config files, etc. Supports optional start_line and end_line for reading specific line ranges in large files. The path should be relative to the workspace root.",
       parameters: {
         type: "object",
         properties: {
-          path: { type: "string", description: "Relative file path from workspace root (e.g., 'src/index.ts', 'package.json')" }
+          path: { type: "string", description: "Relative file path from workspace root (e.g., 'src/index.ts', 'package.json')" },
+          start_line: { type: "integer", description: "Optional 1-based start line number to read a specific range" },
+          end_line: { type: "integer", description: "Optional 1-based end line number to read a specific range" }
         },
         required: ["path"]
       }
@@ -2124,21 +2142,41 @@ async function executeTool(
       }
     }
     case "read_file": {
-      const filePath = String(args.path ?? "");
-      if (!filePath) return { result: "Error: No path provided", isError: true };
-      const absPath = path.resolve(workspaceRoot, filePath);
-      if (!isPathInside(workspaceRoot, absPath)) return { result: "Error: Path outside workspace", isError: true };
+      const rawPath = extractFilePath(args);
+      if (!rawPath) return { result: "Error: No path provided", isError: true };
+      const resolved = resolveWorkspacePath(rawPath);
+      if (!resolved) return { result: `Error: Path outside workspace: ${rawPath}`, isError: true };
+      const { absPath, relPath: filePath } = resolved;
       logger.info(`[tool] read_file: ${filePath}`);
       try {
         const content = await readWorkspaceFile(absPath);
-        // Truncate very large files — the cap is deliberately modest: this
-        // content is re-sent with every tool round, and oversized reads are
-        // the fastest way to blow a tokens-per-minute quota (429s).
+
+        const startLine = typeof args.start_line === "number"
+          ? Math.max(1, Math.floor(args.start_line))
+          : (typeof args.offset === "number" ? Math.max(1, Math.floor(args.offset)) : undefined);
+        const endLine = typeof args.end_line === "number"
+          ? Math.max(1, Math.floor(args.end_line))
+          : (typeof args.limit === "number" && startLine !== undefined ? startLine + Math.floor(args.limit) - 1 : undefined);
+
+        if (startLine !== undefined) {
+          const lines = content.split("\n");
+          const totalLines = lines.length;
+          const from = Math.min(startLine, totalLines);
+          const to = endLine !== undefined ? Math.min(Math.max(from, endLine), totalLines) : totalLines;
+          const slice = lines.slice(from - 1, to);
+          const numbered = slice.map((l, i) => `${from + i}: ${l}`).join("\n");
+          return {
+            result: `Showing lines ${from}-${to} of ${totalLines} in ${filePath}:\n${numbered}`,
+            isError: false
+          };
+        }
+
+        // Truncate very large files if no range was requested
         if (content.length > MAX_TOOL_OUTPUT_CHARS) {
           const head = content.slice(0, Math.floor(MAX_TOOL_OUTPUT_CHARS * 0.7));
           const tail = content.slice(-Math.floor(MAX_TOOL_OUTPUT_CHARS * 0.3));
           return {
-            result: `${head}\n\n... [${content.length - head.length - tail.length} chars elided — file is ${content.length} chars, use offset via edit_file or read specific sections] ...\n\n${tail}`,
+            result: `${head}\n\n... [${content.length - head.length - tail.length} chars elided — file is ${content.length} chars. Use start_line and end_line parameters in read_file to view specific sections] ...\n\n${tail}`,
             isError: false
           };
         }
@@ -2148,9 +2186,11 @@ async function executeTool(
       }
     }
     case "list_files": {
-      const dirPath = String(args.path ?? ".");
-      const absDir = path.resolve(workspaceRoot, dirPath);
+      const rawPath = extractFilePath(args) || ".";
+      const resolved = resolveWorkspacePath(rawPath);
+      const absDir = resolved ? resolved.absPath : path.resolve(workspaceRoot, rawPath);
       if (!isPathInside(workspaceRoot, absDir)) return { result: "Error: Path outside workspace", isError: true };
+      const dirPath = resolved ? resolved.relPath || "." : ".";
       logger.info(`[tool] list_files: ${dirPath}`);
       try {
         const entries = await readdir(absDir, { withFileTypes: true });
@@ -2170,11 +2210,12 @@ async function executeTool(
       }
     }
     case "write_file": {
-      const filePath = String(args.path ?? "");
-      const content = String(args.content ?? "");
-      if (!filePath) return { result: "Error: No path provided", isError: true };
-      const absPath = path.resolve(workspaceRoot, filePath);
-      if (!isPathInside(workspaceRoot, absPath)) return { result: "Error: Path outside workspace", isError: true };
+      const rawPath = extractFilePath(args);
+      const content = extractFileContent(args);
+      if (!rawPath) return { result: "Error: No path provided", isError: true };
+      const resolved = resolveWorkspacePath(rawPath);
+      if (!resolved) return { result: `Error: Path outside workspace: ${rawPath}`, isError: true };
+      const { absPath, relPath: filePath } = resolved;
       logger.info(`[tool] write_file: ${filePath}`);
       try {
         // Read existing file content for checkpoint/diff tracking
@@ -2187,17 +2228,14 @@ async function executeTool(
           // File doesn't exist yet — new file
         }
 
-        // Compute line diffs
-        const oldLines = isNewFile ? [] : previousContent.split("\n");
-        const newLines = content.split("\n");
-        const linesDeleted = isNewFile ? 0 : oldLines.length;
-        const linesAdded = newLines.length;
+        // Compute line diffs using zero-allocation countLines
+        const linesDeleted = isNewFile ? 0 : countLines(previousContent);
+        const linesAdded = countLines(content);
 
-        // Ensure parent directory exists
-        await mkdir(path.dirname(absPath), { recursive: true });
+        // Ensure parent directory exists without redundant syscalls
+        await ensureDirectoryExists(path.dirname(absPath));
         await writeFile(absPath, content, "utf8");
-        rememberFileContent(absPath, content);
-        invalidateWorkspaceCaches();
+        updateFileInWorkspaceCache(absPath, content);
 
         const fileChange: FileChange = {
           toolCallId: toolCallId || "",
@@ -2217,21 +2255,23 @@ async function executeTool(
       const files = Array.isArray(args.files) ? (args.files as Array<Record<string, unknown>>) : [];
       if (files.length === 0) return { result: "Error: No files provided", isError: true };
       logger.info(`[tool] write_files: ${files.length} file(s)`);
-      const written: string[] = [];
-      const failures: string[] = [];
-      const changes: FileChange[] = [];
-      for (const file of files) {
-        const filePath = String(file?.path ?? "");
-        const content = String(file?.content ?? "");
-        if (!filePath) {
-          failures.push("(entry missing path)");
-          continue;
+
+      const WRITE_CONCURRENCY = 16;
+      type WriteResult =
+        | { ok: true; filePath: string; absPath: string; content: string; change: FileChange }
+        | { ok: false; filePath: string; error: string };
+
+      const results = await mapConcurrent(files, WRITE_CONCURRENCY, async (file): Promise<WriteResult> => {
+        const rawPath = extractFilePath(file);
+        const content = extractFileContent(file);
+        if (!rawPath) {
+          return { ok: false, filePath: "(entry missing path)", error: "Missing path" };
         }
-        const absPath = path.resolve(workspaceRoot, filePath);
-        if (!isPathInside(workspaceRoot, absPath)) {
-          failures.push(`${filePath}: Path outside workspace`);
-          continue;
+        const resolved = resolveWorkspacePath(rawPath);
+        if (!resolved) {
+          return { ok: false, filePath: rawPath, error: `Path outside workspace: ${rawPath}` };
         }
+        const { absPath, relPath: filePath } = resolved;
         try {
           let previousContent = "";
           let isNewFile = true;
@@ -2241,24 +2281,35 @@ async function executeTool(
           } catch {
             // New file
           }
-          await mkdir(path.dirname(absPath), { recursive: true });
+          await ensureDirectoryExists(path.dirname(absPath));
           await writeFile(absPath, content, "utf8");
-          rememberFileContent(absPath, content);
-          changes.push({
+          const change: FileChange = {
             toolCallId: toolCallId || "",
             filePath,
-            linesAdded: content.split("\n").length,
-            linesDeleted: isNewFile ? 0 : previousContent.split("\n").length,
+            linesAdded: countLines(content),
+            linesDeleted: isNewFile ? 0 : countLines(previousContent),
             previousContent,
             isNewFile
-          });
-          written.push(filePath);
+          };
+          return { ok: true, filePath, absPath, content, change };
         } catch (err) {
-          failures.push(`${filePath}: ${(err as Error).message}`);
+          return { ok: false, filePath, error: (err as Error).message };
+        }
+      });
+
+      const written: string[] = [];
+      const failures: string[] = [];
+      const changes: FileChange[] = [];
+      for (const res of results) {
+        if (res.ok) {
+          written.push(res.filePath);
+          changes.push(res.change);
+          updateFileInWorkspaceCache(res.absPath, res.content);
+        } else {
+          failures.push(`${res.filePath}: ${res.error}`);
         }
       }
-      // Single invalidation for the whole batch instead of per file
-      invalidateWorkspaceCaches();
+
       const summary =
         `Wrote ${written.length}/${files.length} file(s)` +
         (written.length ? `:\n${written.map((p) => `- ${p}`).join("\n")}` : "") +
@@ -2330,28 +2381,78 @@ async function executeTool(
       }
     }
     case "edit_file": {
-      const filePath = String(args.path ?? "");
-      const oldString = String(args.old_string ?? "");
-      const newString = String(args.new_string ?? "");
-      if (!filePath) return { result: "Error: No path provided", isError: true };
-      if (!oldString) return { result: "Error: No old_string provided", isError: true };
-      const absPath = path.resolve(workspaceRoot, filePath);
-      if (!isPathInside(workspaceRoot, absPath)) return { result: "Error: Path outside workspace", isError: true };
+      const rawPath = extractFilePath(args);
+      const oldString = String(args.old_string ?? args.oldString ?? args.search ?? "");
+      const newString = String(args.new_string ?? args.newString ?? args.replace ?? "");
+      if (!rawPath) return { result: "Error: No path provided", isError: true };
+      const resolved = resolveWorkspacePath(rawPath);
+      if (!resolved) return { result: `Error: Path outside workspace: ${rawPath}`, isError: true };
+      const { absPath, relPath: filePath } = resolved;
       logger.info(`[tool] edit_file: ${filePath}`);
       try {
-        let content = await readWorkspaceFile(absPath);
+        let previousContent = "";
+        let fileExists = true;
+        try {
+          previousContent = await readWorkspaceFile(absPath);
+        } catch {
+          fileExists = false;
+        }
 
-        // Exact match — fast path
+        // If file doesn't exist yet, create it with new_string directly instead of failing with ENOENT
+        if (!fileExists || previousContent.trim() === "") {
+          await ensureDirectoryExists(path.dirname(absPath));
+          await writeFile(absPath, newString, "utf8");
+          updateFileInWorkspaceCache(absPath, newString);
+          const lines = countLines(newString);
+          const fileChange: FileChange = {
+            toolCallId: toolCallId || "",
+            filePath,
+            linesAdded: lines,
+            linesDeleted: 0,
+            previousContent: "",
+            isNewFile: !fileExists
+          };
+          return {
+            result: `File ${fileExists ? "written" : "created"}: ${filePath} (+${lines} lines)`,
+            isError: false,
+            fileChange
+          };
+        }
+
+        let content = previousContent;
+
+        // Exact match — fast path using native indexOf without regex overhead or string splitting
         let replaced = false;
-        if (content.includes(oldString)) {
-          const count = content.split(oldString).length - 1;
-          if (count > 1) {
+        const firstIdx = content.indexOf(oldString);
+        if (firstIdx !== -1) {
+          const secondIdx = content.indexOf(oldString, firstIdx + oldString.length);
+          if (secondIdx !== -1) {
+            let count = 2;
+            let nextIdx = content.indexOf(oldString, secondIdx + oldString.length);
+            while (nextIdx !== -1) {
+              count++;
+              nextIdx = content.indexOf(oldString, nextIdx + oldString.length);
+            }
             return { result: `Error: old_string found ${count} times in ${filePath}. Provide more context to make it unique.`, isError: true };
           }
-          // Function replacer: model-supplied new_string may contain `$&`/`$1`
-          // sequences which String.replace would expand as replacement patterns.
-          content = content.replace(oldString, () => newString);
+          content = content.slice(0, firstIdx) + newString + content.slice(firstIdx + oldString.length);
           replaced = true;
+        }
+
+        // Line-ending normalized match (CRLF vs LF)
+        if (!replaced && (content.includes("\r\n") || oldString.includes("\r\n"))) {
+          const normContent = content.replace(/\r\n/g, "\n");
+          const normOld = oldString.replace(/\r\n/g, "\n");
+          const normFirst = normContent.indexOf(normOld);
+          if (normFirst !== -1) {
+            const normSecond = normContent.indexOf(normOld, normFirst + normOld.length);
+            if (normSecond === -1) {
+              const normNew = newString.replace(/\r\n/g, "\n");
+              const replacedNorm = normContent.slice(0, normFirst) + normNew + normContent.slice(normFirst + normOld.length);
+              content = content.includes("\r\n") ? replacedNorm.replace(/\n/g, "\r\n") : replacedNorm;
+              replaced = true;
+            }
+          }
         }
 
         // Fuzzy match — normalize CRLF→LF and trailing whitespace per line,
@@ -2467,10 +2568,23 @@ async function executeTool(
         }
 
         await writeFile(absPath, content, "utf8");
-        rememberFileContent(absPath, content);
-        invalidateWorkspaceCaches();
-        const linesChanged = newString.split("\n").length - oldString.split("\n").length;
-        return { result: `File edited: ${filePath} (${linesChanged >= 0 ? "+" : ""}${linesChanged} lines)`, isError: false };
+        updateFileInWorkspaceCache(absPath, content);
+        const oldLines = countLines(oldString);
+        const newLines = countLines(newString);
+        const linesChanged = newLines - oldLines;
+        const fileChange: FileChange = {
+          toolCallId: toolCallId || "",
+          filePath,
+          linesAdded: newLines,
+          linesDeleted: oldLines,
+          previousContent,
+          isNewFile: false
+        };
+        return {
+          result: `File edited: ${filePath} (${linesChanged >= 0 ? "+" : ""}${linesChanged} lines)`,
+          isError: false,
+          fileChange
+        };
       } catch (err) {
         return { result: `Error editing file: ${(err as Error).message}`, isError: true };
       }
@@ -3339,7 +3453,9 @@ async function callAIStream(
   quickMode?: boolean,
   onUsage?: (usage: UsageData) => void,
   onThinking?: (delta: string) => void,
-  forceTools?: boolean
+  forceTools?: boolean,
+  mode?: "plan" | "build" | "quick",
+  agentId?: string
 ): Promise<StreamResult> {
   const config = resolveProvider(providerLabel);
   if (!config) {
@@ -3357,9 +3473,12 @@ async function callAIStream(
 
   const model = resolveModel(config, uiModel);
 
+  const isQuickMode = Boolean(quickMode || mode === "quick");
+  const targetAgentId = agentId || (mode === "plan" ? "plan" : (mode === "build" || isQuickMode ? "build" : activeAgentId));
+
   // Build messages with system prompt, workspace file tree, and optional file context
   const basePrompt = getSystemPrompt();
-  const agentPrompt = getAgentSystemPrompt(activeAgentId);
+  const agentPrompt = getAgentSystemPrompt(targetAgentId);
   const fileTree = await getWorkspaceFileTree();
   const systemContent = buildSystemContent(basePrompt, fileTree, agentPrompt, fileContext);
 
@@ -3371,7 +3490,7 @@ async function callAIStream(
   // Quick mode: fast path — up to 4 requests with the same completion gate as
   // the full loop. It used to be a SINGLE request with no loop, which is why
   // quick mode always stopped after one command / one code dump.
-  if (quickMode) {
+  if (isQuickMode) {
     const QUICK_MAX_ROUNDS = 4;
     logger.info("[ai-stream] Quick mode: up to 4 requests with completion gate");
 
@@ -3483,8 +3602,8 @@ async function callAIStream(
 
         for (const block of codeBlocks) {
           try {
-            const filePath = path.resolve(workspaceRoot, block.filename);
-            if (!isPathInside(workspaceRoot, filePath)) {
+            const resolved = resolveWorkspacePath(block.filename);
+            if (!resolved) {
               logger.warn(`[ai-stream] Quick mode: skipped ${block.filename} (outside workspace)`);
               continue;
             }
@@ -3492,7 +3611,7 @@ async function callAIStream(
             // apply to quick mode the same way they do to the tool loop.
             const toolResult = await executeTool(
               "write_file",
-              JSON.stringify({ path: block.filename, content: block.content }),
+              JSON.stringify({ path: resolved.relPath, content: block.content }),
               "quick-mode",
               sessionId,
               onToolEvent
@@ -3579,7 +3698,7 @@ async function callAIStream(
   // OR the active agent is "build" (Codestral/Mistral prefer prose otherwise).
   // After the model calls tools once, switch back to "auto" so it can finish.
   let forceToolChoice = forceTools ?? false;
-  if (!forceToolChoice && activeAgentId === "build") {
+  if (!forceToolChoice && targetAgentId === "build") {
     forceToolChoice = true;
   }
   const allToolCalls: Array<{ id: string; name: string; arguments: string; extraContent?: Record<string, unknown> }> = [];
@@ -4004,13 +4123,21 @@ async function loadFileEntry(absolutePath: string): Promise<FileEntry | null> {
  *  workspace scan doesn't re-read the file we just wrote. */
 function rememberFileContent(absolutePath: string, content: string, mtimeMs?: number, size?: number): void {
   if (fileContentCache.size >= FILE_CONTENT_CACHE_MAX) fileContentCache.clear();
+  const now = Date.now();
   if (mtimeMs !== undefined && size !== undefined) {
-    fileContentCache.set(absolutePath, { mtimeMs, size, content });
+    fileContentCache.set(absolutePath, { mtimeMs, size, content, checkedAt: now });
     return;
   }
+  const estimatedSize = Buffer.byteLength(content, "utf8");
+  fileContentCache.set(absolutePath, { mtimeMs: now, size: estimatedSize, content, checkedAt: now });
   void stat(absolutePath)
     .then((fileStat) => {
-      fileContentCache.set(absolutePath, { mtimeMs: fileStat.mtimeMs, size: fileStat.size, content });
+      const entry = fileContentCache.get(absolutePath);
+      if (entry && entry.content === content) {
+        entry.mtimeMs = fileStat.mtimeMs;
+        entry.size = fileStat.size;
+        entry.checkedAt = Date.now();
+      }
     })
     .catch(() => {
       fileContentCache.delete(absolutePath);
@@ -4021,9 +4148,14 @@ function rememberFileContent(absolutePath: string, content: string, mtimeMs?: nu
  *  files repeatedly (read → edit → verify), and an mtime/size check is far
  *  cheaper than hitting disk again. Throws like fs.readFile when missing. */
 async function readWorkspaceFile(absolutePath: string): Promise<string> {
-  const fileStat = await stat(absolutePath);
+  const now = Date.now();
   const cached = fileContentCache.get(absolutePath);
+  if (cached && now - cached.checkedAt < READ_STAT_GRACE_MS) {
+    return cached.content;
+  }
+  const fileStat = await stat(absolutePath);
   if (cached && cached.mtimeMs === fileStat.mtimeMs && cached.size === fileStat.size) {
+    cached.checkedAt = now;
     return cached.content;
   }
   const content = await readFile(absolutePath, "utf8");
@@ -4042,6 +4174,82 @@ function languageFromExtension(extension: string) {
     case ".yml": case ".yaml": return "yaml";
     default: return "plaintext";
   }
+}
+
+/** Incremental update to workspace file caches when a file is written or edited.
+ *  Avoids invalidating the entire workspace file tree and forcing a full
+ *  re-scan of thousands of files across disk. */
+function updateFileInWorkspaceCache(
+  absolutePath: string,
+  content: string,
+  fileStat?: { mtimeMs: number; size: number }
+): void {
+  rememberFileContent(absolutePath, content, fileStat?.mtimeMs, fileStat?.size);
+
+  const relativePath = path.relative(workspaceRoot, absolutePath);
+  if (!isPathInside(workspaceRoot, absolutePath)) return;
+
+  const extension = path.extname(absolutePath);
+  if (!allowedExtensions.has(extension)) return;
+
+  workspaceEpoch++;
+  fileTreeCache = null;
+  projectContextCache = null;
+  filesVersion++;
+
+  if (!filesCache || filesCache.root !== workspaceRoot) return;
+
+  const entries = filesCache.value;
+  const idx = entries.findIndex((e) => e.path === relativePath);
+  const entrySize = fileStat?.size ?? Buffer.byteLength(content, "utf8");
+  const entry: FileEntry = {
+    id: relativePath,
+    name: path.basename(relativePath),
+    path: relativePath,
+    folder: path.dirname(relativePath),
+    language: languageFromExtension(extension),
+    content:
+      entrySize > MAX_WORKSPACE_FILE_BYTES
+        ? `/* File skipped: size ${entrySize} bytes exceeds limit ${MAX_WORKSPACE_FILE_BYTES} */`
+        : content
+  };
+
+  if (idx >= 0) {
+    entries[idx] = entry;
+  } else {
+    entries.push(entry);
+    entries.sort((a, b) => a.path.localeCompare(b.path));
+  }
+  filesCache.epoch = workspaceEpoch;
+  filesCache.expiresAt = Date.now() + FILES_TTL_MS;
+}
+
+/** Incrementally remove a file or folder from workspace file caches. */
+function removeFileFromWorkspaceCache(targetPath: string): void {
+  for (const key of [...fileContentCache.keys()]) {
+    if (key === targetPath || key.startsWith(targetPath + path.sep)) {
+      fileContentCache.delete(key);
+    }
+  }
+  for (const dir of [...knownDirectories]) {
+    if (dir === targetPath || dir.startsWith(targetPath + path.sep)) {
+      knownDirectories.delete(dir);
+    }
+  }
+
+  workspaceEpoch++;
+  fileTreeCache = null;
+  projectContextCache = null;
+  filesVersion++;
+
+  if (!filesCache || filesCache.root !== workspaceRoot) return;
+
+  const relTarget = path.relative(workspaceRoot, targetPath);
+  filesCache.value = filesCache.value.filter(
+    (e) => e.path !== relTarget && !e.path.startsWith(relTarget + path.sep) && !e.path.startsWith(relTarget + "/")
+  );
+  filesCache.epoch = workspaceEpoch;
+  filesCache.expiresAt = Date.now() + FILES_TTL_MS;
 }
 
 function toSummary(session: StoredSession): SessionSummary {
@@ -4558,10 +4766,17 @@ const server = createServer(async (request, response) => {
         return;
       }
       const allow = body.allow === true;
-      if (allow && body.remember) {
+      if (allow) {
         const approvals = sessionToolApprovals.get(body.sessionId) ?? new Set<ToolAction>();
         approvals.add(pending.action);
         sessionToolApprovals.set(body.sessionId, approvals);
+        // Also unblock any other concurrent pending approvals for this same action in this session
+        for (const [id, p] of [...pendingToolApprovals.entries()]) {
+          if (p.sessionId === body.sessionId && p.action === pending.action) {
+            p.resolve(true);
+            pendingToolApprovals.delete(id);
+          }
+        }
       }
       pending.resolve(allow);
       pendingToolApprovals.delete(body.toolCallId);
@@ -4635,6 +4850,7 @@ const server = createServer(async (request, response) => {
       }
       workspaceRoot = resolved;
       touchProject(resolved);
+      knownDirectories.clear();
       invalidateWorkspaceCaches();
       await refreshConfig();
       // Restart the file watcher so external edits in the new workspace
@@ -4913,7 +5129,7 @@ const server = createServer(async (request, response) => {
         emitter.emit("usage", { messageId, usage });
       }, (delta) => {
         emitter.emit("thinking", { messageId, token: delta });
-      }, payload.forceTools).then((result) => {
+      }, payload.forceTools, payload.mode).then((result) => {
         const current = activeAbortControllers.get(id);
         if (current !== undefined && current !== abortController) return;
         clearAbortController(id, abortController);
@@ -5064,7 +5280,7 @@ const server = createServer(async (request, response) => {
         emitter.emit("usage", { messageId, usage });
       }, (delta) => {
         emitter.emit("thinking", { messageId, token: delta });
-      }, payload.forceTools).then((result) => {
+      }, payload.forceTools, payload.mode).then((result) => {
         // callAIStream resolves (not rejects) on abort. If a newer stream has
         // replaced ours, that stream owns session state now — drop this late
         // result instead of appending it after the new prompt / flipping
@@ -5203,12 +5419,13 @@ const server = createServer(async (request, response) => {
           if (fc.isNewFile) {
             // File was newly created — delete it
             await unlink(absPath);
-            fileContentCache.delete(absPath);
+            removeFileFromWorkspaceCache(absPath);
             logger.info(`[restore] Deleted new file: ${fc.filePath}`);
           } else {
             // File existed before — restore previous content
+            await ensureDirectoryExists(path.dirname(absPath));
             await writeFile(absPath, fc.previousContent, "utf8");
-            rememberFileContent(absPath, fc.previousContent);
+            updateFileInWorkspaceCache(absPath, fc.previousContent);
             logger.info(`[restore] Restored: ${fc.filePath}`);
           }
           restoredFiles.push(fc.filePath);
@@ -5473,9 +5690,9 @@ const server = createServer(async (request, response) => {
         sendJson(response, 400, { error: "Invalid file path" });
         return;
       }
+      await ensureDirectoryExists(path.dirname(targetPath));
       await writeFile(targetPath, payload.content, "utf8");
-      rememberFileContent(targetPath, payload.content);
-      invalidateWorkspaceCaches();
+      updateFileInWorkspaceCache(targetPath, payload.content);
       sendJson(response, 200, { ok: true, path: payload.path });
       return;
     }
@@ -5507,12 +5724,7 @@ const server = createServer(async (request, response) => {
         } else {
           await unlink(targetPath);
         }
-        for (const key of [...fileContentCache.keys()]) {
-          if (key === targetPath || key.startsWith(targetPath + path.sep)) {
-            fileContentCache.delete(key);
-          }
-        }
-        invalidateWorkspaceCaches();
+        removeFileFromWorkspaceCache(targetPath);
         logger.info(`[files] Deleted ${st.isDirectory() ? "folder" : "file"}: ${relPath}`);
         sendJson(response, 200, { ok: true, path: relPath });
       } catch (err) {

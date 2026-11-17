@@ -24,18 +24,30 @@ export class BasicRagEngine {
     const files = await this.collectFiles(this.workspaceRoot);
     
     let indexedFiles = 0;
-    for (const filePath of files.slice(0, maxFiles)) {
-      try {
-        const absPath = path.resolve(this.workspaceRoot, filePath);
-        const stats = await stat(absPath);
-        if (stats.size > 200_000) continue; // skip huge files
+    const targetFiles = files.slice(0, maxFiles);
+    const BATCH_SIZE = 16;
+    for (let i = 0; i < targetFiles.length; i += BATCH_SIZE) {
+      const batch = targetFiles.slice(i, i + BATCH_SIZE);
+      const results = await Promise.all(
+        batch.map(async (filePath) => {
+          try {
+            const absPath = path.resolve(this.workspaceRoot, filePath);
+            const stats = await stat(absPath);
+            if (stats.size > 200_000) return null; // skip huge files
 
-        const content = await readFile(absPath, "utf8");
-        const fileChunks = this.chunkText(filePath, content);
-        this.chunks.push(...fileChunks);
-        indexedFiles++;
-      } catch (err) {
-        logger.warn("rag.index_file_failed", { filePath, error: err instanceof Error ? err.message : String(err) });
+            const content = await readFile(absPath, "utf8");
+            return this.chunkText(filePath, content);
+          } catch (err) {
+            logger.warn("rag.index_file_failed", { filePath, error: err instanceof Error ? err.message : String(err) });
+            return null;
+          }
+        })
+      );
+      for (const fileChunks of results) {
+        if (fileChunks) {
+          this.chunks.push(...fileChunks);
+          indexedFiles++;
+        }
       }
     }
 

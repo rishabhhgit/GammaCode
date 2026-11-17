@@ -8,14 +8,16 @@ type ConfigPaths = {
   projectPath: string;
 };
 
-const DEFAULT_CONFIG: AppConfig = {
+export const DEFAULT_CONFIG: AppConfig = {
   version: 1,
   permissions: {
     tools: {
       run_command: "ask",
-      write_file: "ask",
+      write_file: "allow",
+      edit_file: "allow",
       read_file: "allow",
-      list_files: "allow"
+      list_files: "allow",
+      grep_search: "allow"
     },
     plugins: "ask"
   },
