@@ -958,13 +958,23 @@ const providerConfigs: ProviderConfig[] = [
     label: "OpenRouter",
     envKey: "OPENROUTER_API_KEY",
     baseUrl: "https://openrouter.ai/api/v1",
-    defaultModel: "openai/gpt-4o",
+    defaultModel: "deepseek/deepseek-chat",
     fallbackModels: [
-      "openai/gpt-4o", "openai/gpt-4o-mini", "openai/gpt-4.1", "openai/gpt-4.1-mini",
-      "anthropic/claude-sonnet-4.6", "anthropic/claude-opus-4.6", "anthropic/claude-haiku-4.5",
-      "google/gemini-3.5-flash", "google/gemini-3.1-pro-preview",
-      "deepseek/deepseek-chat", "deepseek/deepseek-r1",
-      "meta-llama/llama-4-maverick", "mistralai/mistral-large-4-0"
+      "deepseek/deepseek-chat",
+      "deepseek/deepseek-r1",
+      "openai/gpt-4o",
+      "openai/gpt-4o-mini",
+      "openai/o3-mini",
+      "anthropic/claude-3.7-sonnet",
+      "anthropic/claude-3.5-sonnet",
+      "anthropic/claude-3.5-haiku",
+      "google/gemini-2.5-pro",
+      "google/gemini-2.5-flash",
+      "meta-llama/llama-3.3-70b-instruct",
+      "qwen/qwen-2.5-coder-32b-instruct",
+      "mistralai/codestral-2508",
+      "deepseek/deepseek-chat:free",
+      "meta-llama/llama-3.3-70b-instruct:free"
     ],
     format: "openai"
   },
@@ -1412,37 +1422,63 @@ async function fetchModelsForProvider(config: ProviderConfig): Promise<string[]>
       });
       if (!res.ok) throw new Error(`OpenRouter /models returned ${res.status}`);
       const data = (await res.json()) as { data?: Array<{ id: string; name?: string }> };
-      // OpenRouter returns hundreds of models — take top popular ones
-      models = (data.data ?? [])
-        .map((m) => m.id)
-        .filter((id) => {
-          // Include only top popular models from major providers
-          const popular = [
-            "openai/gpt-4o", "openai/gpt-4o-mini", "openai/gpt-4.1", "openai/gpt-4.1-mini",
-            "anthropic/claude-sonnet-4.6", "anthropic/claude-opus-4.6", "anthropic/claude-haiku-4.5",
-            "google/gemini-3.5-flash", "google/gemini-3.1-pro-preview",
-            "deepseek/deepseek-chat", "deepseek/deepseek-r1",
-            "meta-llama/llama-4-maverick", "mistralai/mistral-large-4-0",
-            "cohere/command-a-plus"
-          ];
-          return popular.includes(id);
-        });
+
+      const curated = [
+        "deepseek/deepseek-chat",
+        "deepseek/deepseek-r1",
+        "openai/gpt-4o",
+        "openai/gpt-4o-mini",
+        "openai/o3-mini",
+        "openai/o1",
+        "anthropic/claude-3.7-sonnet",
+        "anthropic/claude-3.5-sonnet",
+        "anthropic/claude-3.5-haiku",
+        "google/gemini-2.5-pro",
+        "google/gemini-2.5-flash",
+        "meta-llama/llama-3.3-70b-instruct",
+        "qwen/qwen-2.5-coder-32b-instruct",
+        "mistralai/codestral-2508",
+        "mistralai/mistral-large-2411"
+      ];
+
+      const allIds = (data.data ?? []).map((m) => m.id);
+      const foundCurated = curated.filter((id) => allIds.includes(id));
+
+      const additional = allIds.filter((id) => {
+        if (id.includes(":batch")) return false;
+        if (foundCurated.includes(id)) return false;
+        if (id.includes(":free")) return true;
+        const isTopLab =
+          id.startsWith("anthropic/") ||
+          id.startsWith("openai/") ||
+          id.startsWith("google/") ||
+          id.startsWith("deepseek/") ||
+          id.startsWith("meta-llama/");
+        if (!isTopLab) return false;
+        if (id.includes("claude-1") || id.includes("claude-2") || id.includes("gpt-3.5")) return false;
+        return true;
+      }).slice(0, 25);
+
+      models = [...foundCurated, ...additional];
+      if (models.length === 0) {
+        models = config.fallbackModels;
+      }
     } else if (config.format === "gemini") {
-      const res = await fetch(`${config.baseUrl}/models?key=${apiKey}`);
+      const res = await fetch(`${config.baseUrl}/models`, {
+        headers: { Authorization: `Bearer ${apiKey}` }
+      });
       if (!res.ok) throw new Error(`Gemini /models returned ${res.status}`);
-      const data = (await res.json()) as { models?: Array<{ name: string }> };
-      // Only show latest supported Gemini models
+      const data = (await res.json()) as { data?: Array<{ id: string }> };
       const latestGemini = new Set([
         "gemini-2.5-flash", "gemini-2.5-pro",
         "gemini-3.5-flash", "gemini-3.5-flash-lite",
-        "gemini-3.1-pro-preview"
+        "gemini-3.1-pro-preview", "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"
       ]);
-      models = (data.models ?? [])
-        .map((m) => m.name.replace("models/", ""))
+      models = (data.data ?? [])
+        .map((m) => m.id.replace("models/", ""))
         .filter((id) => {
           if (!id.includes("gemini") || id.includes(":batch")) return false;
-          // Accept exact latest models or any gemini-3.x/2.5 model
-          return latestGemini.has(id) || id.startsWith("gemini-3.") || id.startsWith("gemini-2.5");
+          return latestGemini.has(id) || id.startsWith("gemini-3.") || id.startsWith("gemini-2.") || id.startsWith("gemini-1.5");
         })
         .sort();
     }
@@ -2761,26 +2797,18 @@ async function callOpenAICompatibleStream(
     Authorization: `Bearer ${apiKey}`
   };
 
-  if (config.baseUrl.includes("openrouter.ai")) {
+  const isOpenRouter = config.baseUrl.includes("openrouter.ai") || config.id === "openrouter";
+  if (isOpenRouter) {
     headers["HTTP-Referer"] = "https://gamma-code.local";
     headers["X-Title"] = "Gamma Code";
   }
 
+  // OpenRouter reserves balance based on max_tokens. Setting 4096 (or lower on balance pressure)
+  // prevents premature 402 payment required errors when accounts have moderate remaining credit.
+  let currentMaxTokens = isOpenRouter ? 4096 : 8192;
+  const isReasoning = model.includes("o1") || model.includes("o3") || model.includes("r1");
+  let sendTools = true;
   const toolDefs = buildAiToolsOpenAI();
-  const body = JSON.stringify({
-    model,
-    messages: buildOpenAIContents(messages, { geminiCompat: isGeminiCompatEndpoint(config.baseUrl) }),
-    max_tokens: 8192,
-    temperature: 0.2,
-    stream: true,
-    stream_options: { include_usage: true },
-    tools: toolDefs,
-    tool_choice: forceToolChoice ? "required" : "auto"
-  });
-
-  logger.info(`[ai-stream] Calling ${config.label} (${model}) at ${url}`);
-  logger.info(`[ai-stream] Tools sent: ${toolDefs.map((t) => t.function.name).join(", ")}`);
-  logger.info(`[ai-stream] Body snippet: ${body.slice(0, 500)}`);
 
   // Rate-limit aware retry: honor Retry-After/retry_after headers and bodies,
   // share cooldown across concurrent requests, fail fast on long waits.
@@ -2788,7 +2816,31 @@ async function callOpenAICompatibleStream(
   // 60-second timeout so a hung API response can't stall the session forever
   const timeoutSignal = AbortSignal.timeout(60_000);
   const effectiveSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+
   for (let attempt = 0; isRateLimitAttemptAllowed(attempt); attempt++) {
+    const bodyObj: Record<string, unknown> = {
+      model,
+      messages: buildOpenAIContents(messages, { geminiCompat: isGeminiCompatEndpoint(config.baseUrl) }),
+      max_tokens: currentMaxTokens,
+      stream: true,
+      stream_options: { include_usage: true }
+    };
+
+    if (!isReasoning) {
+      bodyObj.temperature = 0.2;
+    }
+
+    if (sendTools) {
+      bodyObj.tools = toolDefs;
+      bodyObj.tool_choice = forceToolChoice ? "required" : "auto";
+    }
+
+    const body = JSON.stringify(bodyObj);
+
+    logger.info(`[ai-stream] Calling ${config.label} (${model}) at ${url} (max_tokens=${currentMaxTokens})`);
+    logger.info(`[ai-stream] Tools sent: ${sendTools ? toolDefs.map((t) => t.function.name).join(", ") : "none"}`);
+    logger.info(`[ai-stream] Body snippet: ${body.slice(0, 500)}`);
+
     const response = await fetch(url, { method: "POST", headers, body, signal: effectiveSignal });
 
     if (response.status === 429) {
@@ -2799,6 +2851,42 @@ async function callOpenAICompatibleStream(
       onToken(`\n\n⏳ ${config.label} rate limited. Retrying in ${Math.round(backoffMs / 1000)}s...\n\n`);
       await new Promise((resolve) => setTimeout(resolve, backoffMs));
       continue;
+    }
+
+    // Handle OpenRouter credit limit errors (402 Payment Required)
+    if (response.status === 402) {
+      const errorBody = await response.text().catch(() => "");
+      logger.warn(`[ai-stream] 402 Payment Required from ${config.label}: ${errorBody}`);
+
+      // OpenRouter returns: "You requested up to 8192 tokens, but can only afford 4837."
+      const affordMatch = errorBody.match(/can only afford (\d+)/i);
+      if (affordMatch) {
+        const affordable = parseInt(affordMatch[1], 10);
+        if (affordable >= 256 && currentMaxTokens > affordable) {
+          logger.info(`[ai-stream] OpenRouter credit limit: adjusting max_tokens from ${currentMaxTokens} to ${affordable} and retrying`);
+          currentMaxTokens = affordable;
+          continue; // Retry with affordable token limit
+        }
+      }
+
+      let cleanMsg = "OpenRouter credits insufficient.";
+      try {
+        const parsed = JSON.parse(errorBody);
+        if (parsed.error?.message) cleanMsg = parsed.error.message;
+      } catch {}
+      throw new Error(`${cleanMsg} Please add credits at https://openrouter.ai/settings/credits or select a free model.`);
+    }
+
+    // Handle models that reject tools or tool_choice (400 Bad Request)
+    if (response.status === 400 && sendTools) {
+      const errorBody = await response.text().catch(() => "");
+      logger.warn(`[ai-stream] 400 Bad Request from ${config.label}: ${errorBody.slice(0, 500)}`);
+      if (errorBody.includes("tool") || errorBody.includes("function") || errorBody.includes("tool_choice")) {
+        logger.info(`[ai-stream] Model may not support tools. Retrying without tools...`);
+        sendTools = false;
+        continue;
+      }
+      throw new Error(`HTTP 400 from ${config.label}: ${errorBody.slice(0, 500)}`);
     }
 
     if (!response.ok) {
@@ -2812,50 +2900,43 @@ async function callOpenAICompatibleStream(
     }
 
     return parseSSEStream(
-    response.body,
-    (parsed) => {
-      const choices = parsed.choices as Array<{ delta?: { content?: string } }> | undefined;
-      return choices?.[0]?.delta?.content ?? null;
-    },
-    onToken,
-    signal,
-    // Extract usage from the final chunk (Chat Completions includes usage when stream_options.include_usage is true)
-    (parsed) => {
-      const usage = parsed.usage as { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
-      if (usage && typeof usage.prompt_tokens === "number") {
-        return {
-          inputTokens: usage.prompt_tokens,
-          outputTokens: usage.completion_tokens ?? 0,
-          totalTokens: usage.total_tokens ?? (usage.prompt_tokens + (usage.completion_tokens ?? 0))
-        };
-      }
-      return null;
-    },
-    // Extract tool call deltas from OpenAI streaming format
-    (parsed) => {
-      const choices = parsed.choices as Array<{
-        delta?: { 
-          tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string }; extra_content?: Record<string, unknown> }>;
+      response.body,
+      (parsed) => {
+        const choices = parsed.choices as Array<{ delta?: { content?: string } }> | undefined;
+        return choices?.[0]?.delta?.content ?? null;
+      },
+      onToken,
+      signal,
+      (parsed) => {
+        const usage = parsed.usage as { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
+        if (usage && typeof usage.prompt_tokens === "number") {
+          return {
+            inputTokens: usage.prompt_tokens,
+            outputTokens: usage.completion_tokens ?? 0,
+            totalTokens: usage.total_tokens ?? (usage.prompt_tokens + (usage.completion_tokens ?? 0))
+          };
         }
-      }> | undefined;
-      const tc = choices?.[0]?.delta?.tool_calls?.[0];
-      if (!tc) return null;
-      // Gemini OpenAI-compat returns thought_signature in
-      // extra_content.google.thought_signature. Normalize to the
-      // { thoughtSignature } carrier so persistence + history builders
-      // (which use pickThoughtSignature) see it; raw shape was stored
-      // but never echoed back on continuation turns.
-      const signature = pickThoughtSignature(tc.extra_content);
-      return {
-        index: tc.index,
-        id: tc.id,
-        name: tc.function?.name,
-        arguments: tc.function?.arguments,
-        extraContent: signature ? { thoughtSignature: signature } : undefined
-      };
-    },
-    onThinking
-  );
+        return null;
+      },
+      (parsed) => {
+        const choices = parsed.choices as Array<{
+          delta?: { 
+            tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string }; extra_content?: Record<string, unknown> }>;
+          }
+        }> | undefined;
+        const tc = choices?.[0]?.delta?.tool_calls?.[0];
+        if (!tc) return null;
+        const signature = pickThoughtSignature(tc.extra_content);
+        return {
+          index: tc.index,
+          id: tc.id,
+          name: tc.function?.name,
+          arguments: tc.function?.arguments,
+          extraContent: signature ? { thoughtSignature: signature } : undefined
+        };
+      },
+      onThinking
+    );
   }
   throw new RateLimitError(`Rate limited after retries for ${config.label}`);
 }
