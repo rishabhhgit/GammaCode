@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 export const APP_NAME = "Gamma Code";
+export const APP_VERSION = "0.1.0";
+export const REPO_URL = "https://github.com/rishabhhgit/GammaCode";
 
 const sessionStatusSchema = z.enum(["idle", "running", "review"]);
 const commandRunStatusSchema = z.enum(["running", "completed", "failed", "killed"]);

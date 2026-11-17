@@ -4691,6 +4691,126 @@ button.titlebar-chip {
   border-radius: var(--radius-sm);
 }
 
+/* ===== About Section ===== */
+.about-card {
+  padding: 16px;
+  border: 1px solid var(--border-weaker-base);
+  border-radius: var(--radius-lg);
+  background: var(--surface-base);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.about-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.about-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.about-logo-badge {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: var(--accent-base, #fab283);
+  color: #121212;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.about-app-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-strong);
+  line-height: 1.2;
+}
+
+.about-tagline {
+  font-size: 11px;
+  color: var(--text-weak);
+  margin-top: 2px;
+}
+
+.about-version-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--surface);
+  color: var(--accent-base, #fab283);
+  border: 1px solid var(--border-weaker-base);
+}
+
+.about-description {
+  font-size: 12px;
+  color: var(--text-base);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.about-features-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.about-feature-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-weak);
+  background: var(--surface);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-weaker-base);
+}
+
+.about-feature-icon {
+  color: var(--accent-base, #fab283);
+  flex-shrink: 0;
+}
+
+.about-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-weaker-base);
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.about-github-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent-base, #fab283);
+  text-decoration: none;
+  transition: opacity 0.15s ease;
+}
+
+.about-github-link:hover {
+  text-decoration: underline;
+  opacity: 0.85;
+}
+
+.about-license-badge {
+  font-size: 11px;
+  color: var(--text-weak);
+}
+
 /* Focus visibility � declared last so later `outline: none` rules cannot
    defeat keyboard focus indicators. */
 button:focus-visible,

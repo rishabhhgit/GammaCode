@@ -4,6 +4,20 @@ An AI-powered desktop code editor built with Electron, React, and Node.js. Think
 
 ![Gamma Code](https://img.shields.io/badge/status-active-brightgreen) ![License](https://img.shields.io/badge/license-MIT-blue) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
 
+## About Gamma Code
+
+Gamma Code is a local-first, open-source AI code editor designed for developers who want the fluidity of AI-assisted engineering without sacrificing code privacy, software freedom, or tool control.
+
+Unlike proprietary tools that tunnel your entire codebase through remote cloud servers, Gamma Code operates strictly on your machine. Your files, workspaces, git repositories, and shell commands stay local. Only the explicit context and prompts you choose to send are dispatched to your preferred AI provider — whether that is GitHub Copilot, Anthropic Claude, OpenAI, Google Gemini, OpenRouter, or completely offline local models via Ollama.
+
+### Core Philosophy
+
+- **Local-First & Private** — Your source code never leaves your computer. File reads, writes, AST searches, and terminal commands execute in a sandboxed local Node.js process.
+- **Provider Agnostic** — Seamlessly switch between cutting-edge frontier models (Claude 3.7 Sonnet, GPT-4o, Gemini 2.0 Flash) and local offline LLMs (Llama 3, DeepSeek-Coder, Qwen) with zero lock-in.
+- **Autonomous Yet Safe** — Powerful tool execution loop allowing AI to read files, write changes, and verify code with build/test commands — gated by customizable permission policies (`allow`, `ask`, `deny`).
+- **True Development Environment** — Built on VS Code's battle-tested Monaco Editor and native hardware-accelerated PTY terminal emulation (xterm.js + node-pty).
+- **Session Reversibility** — Full conversation state and file checkpoints allow instant one-click diff reviews and rollback of any AI modifications.
+
 ### Why Gamma Code?
 
 - **Privacy first** — All file operations happen locally. Only the prompts you send to AI providers leave your machine.

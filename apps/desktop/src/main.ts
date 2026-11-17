@@ -182,12 +182,30 @@ function createMenu() {
         {
           label: "About Gamma Code",
           click: () => {
-            dialog.showMessageBox(mainWindow!, {
-              type: "info",
-              title: "About Gamma Code",
-              message: "Gamma Code",
-              detail: `Version ${CURRENT_VERSION}\n\n`,
-            })
+            dialog
+              .showMessageBox(mainWindow!, {
+                type: "info",
+                title: "About Gamma Code",
+                message: `Gamma Code v${CURRENT_VERSION}`,
+                detail: [
+                  "An open-source, local-first AI code editor.",
+                  "",
+                  "• Multi-model support: Copilot, Claude, GPT, Gemini, OpenRouter & local Ollama",
+                  "• Full integrated PTY terminal powered by xterm.js",
+                  "• Autonomous tool execution with strict permission gates",
+                  "• Native Git integration with diffs & rollback checkpoints",
+                  "",
+                  "Repository: https://github.com/rishabhhgit/GammaCode",
+                  "License: MIT",
+                ].join("\n"),
+                buttons: ["OK", "View on GitHub"],
+                defaultId: 0,
+              })
+              .then(({ response }) => {
+                if (response === 1) {
+                  void shell.openExternal("https://github.com/rishabhhgit/GammaCode")
+                }
+              })
           },
         },
         { type: "separator" },

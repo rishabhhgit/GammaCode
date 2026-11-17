@@ -56,10 +56,13 @@ import {
   Zap,
   Paperclip,
   FileText,
+  Info,
 } from "lucide-react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import {
   APP_NAME,
+  APP_VERSION,
+  REPO_URL,
   type AuthStatusResponse,
   type CommandRun,
   type FileChange,
@@ -4687,6 +4690,63 @@ export default function App() {
                       ))}
                   </div>
                 )}
+              </div>
+
+              {/* --- About Section --- */}
+              <div className="overlay-section">
+                <h3 className="overlay-section-title">About</h3>
+                <div className="about-card">
+                  <div className="about-header">
+                    <div className="about-title-row">
+                      <div className="about-logo-badge">
+                        <Sparkles size={16} />
+                      </div>
+                      <div>
+                        <div className="about-app-name">{APP_NAME}</div>
+                        <div className="about-tagline">
+                          Open-source, local-first AI code editor
+                        </div>
+                      </div>
+                    </div>
+                    <span className="about-version-badge">v{APP_VERSION}</span>
+                  </div>
+
+                  <p className="about-description">
+                    Gamma Code provides a self-hosted, privacy-first engineering environment. All workspace file operations, tool executions, and shell tasks run entirely on your local machine with strict permission gating and instant rollback checkpoints.
+                  </p>
+
+                  <div className="about-features-grid">
+                    <div className="about-feature-item">
+                      <Bot size={13} className="about-feature-icon" />
+                      <span>Multi-Provider AI (Copilot, Claude, GPT, Gemini, Ollama)</span>
+                    </div>
+                    <div className="about-feature-item">
+                      <Terminal size={13} className="about-feature-icon" />
+                      <span>Real PTY Terminal (xterm.js + node-pty)</span>
+                    </div>
+                    <div className="about-feature-item">
+                      <Wrench size={13} className="about-feature-icon" />
+                      <span>Autonomous Tool Loop with Sandboxed Controls</span>
+                    </div>
+                    <div className="about-feature-item">
+                      <GitBranch size={13} className="about-feature-icon" />
+                      <span>Native Git Branches, Diffs & Session Rollback</span>
+                    </div>
+                  </div>
+
+                  <div className="about-footer">
+                    <a
+                      href={REPO_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="about-github-link"
+                    >
+                      <ExternalLink size={12} />
+                      <span>View Repository on GitHub</span>
+                    </a>
+                    <span className="about-license-badge">MIT License</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
