@@ -563,6 +563,10 @@ export default function App() {
   const fitAddonRef = useRef<FitAddon | null>(null);
   const termWsRef = useRef<WebSocket | null>(null);
   const [xtermReady, setXtermReady] = useState(false);
+  const [terminalSessionId, setTerminalSessionId] = useState(0);
+  const [terminalCursorStyle, setTerminalCursorStyle] = useState<"bar" | "block" | "underline">(() => {
+    return (localStorage.getItem("gc:terminalCursorStyle") as "bar" | "block" | "underline") || "bar";
+  });
 
   // Auth state
   const [authStatus, setAuthStatus] = useState<AuthStatusResponse | null>(null);
@@ -1256,22 +1260,31 @@ export default function App() {
     // Wait for the container to be mounted
     const container = xtermContainerRef.current;
     if (!container) return;
-    // If already initialized, just re-fit
-    if (xtermRef.current) {
-      requestAnimationFrame(() => fitAddonRef.current?.fit());
+    // If already initialized and not restarting, just re-fit
+    if (xtermRef.current && fitAddonRef.current) {
+      requestAnimationFrame(() => {
+        try {
+          fitAddonRef.current?.fit();
+        } catch {}
+      });
       return;
     }
 
     const term = new XTerminal({
       cursorBlink: true,
+      cursorStyle: terminalCursorStyle,
+      cursorWidth: terminalCursorStyle === "bar" ? 2 : 1,
+      cursorInactiveStyle: "outline",
       fontSize: 13,
       fontFamily: "'IBM Plex Mono', 'Menlo', 'Monaco', monospace",
-      lineHeight: 1.4,
+      lineHeight: 1.25,
+      scrollback: 10000,
       theme: {
         background: "#101010",
-        foreground: "rgba(255, 255, 255, 0.85)",
+        foreground: "rgba(255, 255, 255, 0.88)",
         cursor: "#fab283",
-        selectionBackground: "rgba(255, 255, 255, 0.15)",
+        cursorAccent: "#101010",
+        selectionBackground: "rgba(255, 255, 255, 0.18)",
         black: "#1c1c1c",
         red: "#fc533a",
         green: "#12c905",
@@ -1279,7 +1292,7 @@ export default function App() {
         blue: "#034cff",
         magenta: "#c678dd",
         cyan: "#56b6c2",
-        white: "rgba(255, 255, 255, 0.85)",
+        white: "rgba(255, 255, 255, 0.88)",
         brightBlack: "#5c6370",
         brightRed: "#e06c75",
         brightGreen: "#98c379",
@@ -1302,14 +1315,40 @@ export default function App() {
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
 
+    // Copy on selection with Cmd+C / Ctrl+C, paste on Cmd+V / Ctrl+V
+    term.attachCustomKeyEventHandler((event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
+        if (term.hasSelection()) {
+          void navigator.clipboard.writeText(term.getSelection());
+          return false;
+        }
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v" && event.type === "keydown") {
+        navigator.clipboard.readText().then((clipText) => {
+          if (clipText) {
+            const socket = termWsRef.current;
+            if (socket && socket.readyState === WebSocket.OPEN) {
+              socket.send(JSON.stringify({ type: "input", data: clipText }));
+            }
+          }
+        }).catch(() => {});
+        return false;
+      }
+      return true;
+    });
+
     term.open(container);
-    fitAddon.fit();
+    requestAnimationFrame(() => {
+      try {
+        fitAddon.fit();
+      } catch {}
+      term.focus();
+    });
 
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
 
-    // Connect to WebSocket PTY server, with auto-reconnect: a server restart
-    // or network blip used to leave the dock stuck on "Connecting..." forever.
+    // Connect to WebSocket PTY server, with auto-reconnect
     let disposed = false;
     let reconnectAttempts = 0;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1328,9 +1367,15 @@ export default function App() {
         reconnectAttempts = 0;
         setXtermReady(true);
         console.log("[terminal] WebSocket connected");
+        try {
+          fitAddon.fit();
+        } catch {}
+        const cols = Math.max(term.cols || 80, 20);
+        const rows = Math.max(term.rows || 24, 5);
         socket.send(
-          JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }),
+          JSON.stringify({ type: "resize", cols, rows }),
         );
+        term.focus();
       };
 
       socket.onmessage = (event) => {
@@ -1344,7 +1389,9 @@ export default function App() {
           if (msg.type === "output" && msg.data) {
             term.write(msg.data);
           } else if (msg.type === "exit") {
-            term.write("\r\n\x1b[90m[Process exited]\x1b[0m\r\n");
+            term.write(
+              `\r\n\x1b[90m[Process exited with code ${msg.exitCode ?? 0} — click Restart in toolbar to restart]\x1b[0m\r\n`,
+            );
           }
         } catch {
           // Ignore malformed
@@ -1355,17 +1402,17 @@ export default function App() {
         setXtermReady(false);
         console.log("[terminal] WebSocket disconnected");
         if (disposed) return;
-        if (wasOpen) {
+        if (wasOpen && reconnectAttempts === 0) {
           term.write("\r\n\x1b[90m[Terminal disconnected — reconnecting…]\x1b[0m\r\n");
         }
         reconnectAttempts += 1;
-        if (reconnectAttempts > 10) {
+        if (reconnectAttempts > 8) {
           term.write(
-            "\r\n\x1b[90m[Terminal reconnect failed — toggle the terminal panel to retry]\x1b[0m\r\n",
+            "\r\n\x1b[90m[Terminal disconnected — click the Restart button in the toolbar to reconnect]\x1b[0m\r\n",
           );
           return;
         }
-        const delay = Math.min(500 * 2 ** Math.min(reconnectAttempts - 1, 4), 8000);
+        const delay = Math.min(600 * 2 ** Math.min(reconnectAttempts - 1, 3), 6000);
         reconnectTimer = setTimeout(connect, delay);
       };
 
@@ -1386,18 +1433,26 @@ export default function App() {
     // Handle resize
     const resizeDisposable = term.onResize(({ cols, rows }) => {
       const socket = termWsRef.current;
-      if (socket && socket.readyState === WebSocket.OPEN) {
+      if (socket && socket.readyState === WebSocket.OPEN && cols > 0 && rows > 0) {
         socket.send(JSON.stringify({ type: "resize", cols, rows }));
       }
     });
 
     // Re-fit on window resize
-    const handleWindowResize = () => fitAddon.fit();
+    const handleWindowResize = () => {
+      try {
+        fitAddon.fit();
+      } catch {}
+    };
     window.addEventListener("resize", handleWindowResize);
 
     // Also observe the container for size changes (panel resizing)
     const resizeObserver = new ResizeObserver(() => {
-      requestAnimationFrame(() => fitAddon.fit());
+      requestAnimationFrame(() => {
+        try {
+          fitAddon.fit();
+        } catch {}
+      });
     });
     resizeObserver.observe(container);
 
@@ -1415,7 +1470,15 @@ export default function App() {
       fitAddonRef.current = null;
       setXtermReady(false);
     };
-  }, [showTerminal]);
+  }, [showTerminal, terminalSessionId]);
+
+  // Dynamically update terminal cursor options when style changes
+  useEffect(() => {
+    if (xtermRef.current) {
+      xtermRef.current.options.cursorStyle = terminalCursorStyle;
+      xtermRef.current.options.cursorWidth = terminalCursorStyle === "bar" ? 2 : 1;
+    }
+  }, [terminalCursorStyle]);
 
   // Re-fit terminal when switching back to the terminal dock tab
   useEffect(() => {
@@ -1441,8 +1504,11 @@ export default function App() {
   // Global keyboard shortcuts
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      // Cmd+K — open search popup
+      // Cmd+K — open search popup (do not intercept Ctrl+K in terminal)
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        if (xtermContainerRef.current?.contains(document.activeElement) && !e.metaKey) {
+          return;
+        }
         e.preventDefault();
         setShowSearchPopup(true);
         requestAnimationFrame(() => {
@@ -4078,6 +4144,56 @@ export default function App() {
                           )}
                           <div className="terminal-status-actions">
                             <button
+                              className="terminal-chip-btn"
+                              type="button"
+                              title={`Cursor / pointer style: ${terminalCursorStyle} (click to cycle: bar → underline → block)`}
+                              onClick={() => {
+                                const nextStyle =
+                                  terminalCursorStyle === "bar"
+                                    ? "underline"
+                                    : terminalCursorStyle === "underline"
+                                      ? "block"
+                                      : "bar";
+                                setTerminalCursorStyle(nextStyle);
+                                localStorage.setItem("gc:terminalCursorStyle", nextStyle);
+                              }}
+                            >
+                              <span>Cursor: {terminalCursorStyle}</span>
+                            </button>
+                            <button
+                              className="toggle-panel-btn"
+                              type="button"
+                              title="Clear terminal output"
+                              onClick={() => {
+                                if (xtermRef.current) {
+                                  xtermRef.current.clear();
+                                  xtermRef.current.focus();
+                                }
+                              }}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                            <button
+                              className="toggle-panel-btn"
+                              type="button"
+                              title="Restart terminal session"
+                              onClick={() => {
+                                if (termWsRef.current) {
+                                  try {
+                                    termWsRef.current.close();
+                                  } catch {}
+                                  termWsRef.current = null;
+                                }
+                                if (xtermRef.current) {
+                                  xtermRef.current.clear();
+                                  xtermRef.current.write("\r\n\x1b[90m[Restarting terminal session…]\x1b[0m\r\n");
+                                }
+                                setTerminalSessionId((id) => id + 1);
+                              }}
+                            >
+                              <RotateCcw size={12} />
+                            </button>
+                            <button
                               className="toggle-panel-btn"
                               type="button"
                               title="Copy terminal content"
@@ -4109,15 +4225,15 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="terminal-body">
+                      <div className="terminal-body" onClick={() => xtermRef.current?.focus()}>
                         <div
                           ref={xtermContainerRef}
                           className="xterm-container"
+                          onClick={() => xtermRef.current?.focus()}
                           style={{
                             display: dockTab === "terminal" ? "block" : "none",
                           }}
                         />
-
                       </div>
                     </section>
                   </Panel>

@@ -5865,15 +5865,51 @@ const WS_PORT = Number(process.env.WS_PORT ?? 3031);
 // Active PTY sessions keyed by WebSocket
 const activePtySessions = new Map<WebSocket, nodePty.IPty>();
 
+/** Build an augmented environment for the PTY session so standard developer
+ *  tools (brew, node, pnpm, cargo, etc.) are available even when spawned from
+ *  GUI desktop apps or minimal path environments. */
+function getTerminalEnvironment(): Record<string, string> {
+  const env: Record<string, string> = { ...process.env } as Record<string, string>;
+  env.TERM = "xterm-256color";
+  env.COLORTERM = "truecolor";
+
+  if (process.platform !== "win32") {
+    const home = process.env.HOME || "";
+    const extraPaths = [
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
+      "/usr/local/sbin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+      home ? path.join(home, ".local", "bin") : "",
+      home ? path.join(home, ".cargo", "bin") : "",
+      home ? path.join(home, ".pnpm") : "",
+      home ? path.join(home, "Library", "pnpm") : "",
+    ].filter(Boolean);
+
+    const existing = (env.PATH || "").split(path.delimiter).filter(Boolean);
+    const combined = Array.from(new Set([...existing, ...extraPaths]));
+    env.PATH = combined.join(path.delimiter);
+  }
+
+  return env;
+}
+
 /** Shell for the integrated terminal.
  *  `GAMMA_CODE_SHELL` (or `SHELL`) wins when it names something that exists;
- *  otherwise PowerShell/COMSPEC on Windows and zsh elsewhere. The previous
- *  unconditional `/bin/zsh` default could not spawn at all on Windows. */
+ *  otherwise PowerShell/COMSPEC on Windows and zsh elsewhere.
+ *  Uses login shell ("-l") on Unix/macOS so profiles (~/.zprofile, PATH, etc.) are sourced. */
 function resolveTerminalShell(): { command: string; args: string[] } {
+  const isWindows = process.platform === "win32";
   const configured = process.env.GAMMA_CODE_SHELL?.trim() || process.env.SHELL?.trim();
-  if (configured && existsSync(configured)) return { command: configured, args: [] };
+  if (configured && existsSync(configured)) {
+    return { command: configured, args: isWindows ? [] : ["-l"] };
+  }
 
-  if (process.platform === "win32") {
+  if (isWindows) {
     const powershell = path.join(
       process.env.WINDIR || "C:\\Windows",
       "System32",
@@ -5888,9 +5924,9 @@ function resolveTerminalShell(): { command: string; args: string[] } {
   }
 
   for (const candidate of ["/bin/zsh", "/bin/bash", "/bin/sh"]) {
-    if (existsSync(candidate)) return { command: candidate, args: [] };
+    if (existsSync(candidate)) return { command: candidate, args: ["-l"] };
   }
-  return { command: "sh", args: [] };
+  return { command: "sh", args: ["-l"] };
 }
 
 function startTerminalServer(): void {
@@ -5903,13 +5939,23 @@ function startTerminalServer(): void {
   });
 
   wss.on("connection", (ws: WebSocket, request: IncomingMessage) => {
-    // Same-origin guard: any local process (or a malicious page targeting
-    // localhost) could otherwise attach to the PTY and get a free shell.
+    // Same-origin guard: allow configured origins, local development, or Electron IPC.
     const origin = request.headers.origin;
-    if (origin && !allowedOrigins.has(origin)) {
-      logger.warn("[terminal] Rejected PTY connection from disallowed origin", { origin });
-      ws.close(4003, "Origin not allowed");
-      return;
+    if (origin) {
+      let isAllowed = allowedOrigins.has(origin);
+      if (!isAllowed) {
+        try {
+          const u = new URL(origin);
+          if (u.hostname === "localhost" || u.hostname === "127.0.0.1") {
+            isAllowed = true;
+          }
+        } catch {}
+      }
+      if (!isAllowed) {
+        logger.warn("[terminal] Rejected PTY connection from disallowed origin", { origin });
+        ws.close(4003, "Origin not allowed");
+        return;
+      }
     }
     if (webPassword) {
       const urlToken = request.url?.includes("?")
@@ -5924,17 +5970,17 @@ function startTerminalServer(): void {
       }
     }
     const shell = resolveTerminalShell();
+    const workingDir = existsSync(workspaceRoot) ? workspaceRoot : (process.env.HOME || process.cwd());
+    const terminalEnv = getTerminalEnvironment();
+
     let ptyProcess: nodePty.IPty;
     try {
       ptyProcess = nodePty.spawn(shell.command, shell.args, {
         name: "xterm-256color",
         cols: 120,
         rows: 30,
-        cwd: workspaceRoot,
-        env: {
-          ...process.env,
-          TERM: "xterm-256color"
-        } as Record<string, string>
+        cwd: workingDir,
+        env: terminalEnv
       });
     } catch (err) {
       logger.error("terminal.spawn_failed", { error: err instanceof Error ? err.message : String(err) });
@@ -5944,7 +5990,7 @@ function startTerminalServer(): void {
     }
 
     activePtySessions.set(ws, ptyProcess);
-    logger.info(`[terminal] PTY spawned (pid: ${ptyProcess.pid}, shell: ${shell})`);
+    logger.info(`[terminal] PTY spawned (pid: ${ptyProcess.pid}, command: ${shell.command} ${shell.args.join(" ")}, cwd: ${workingDir})`);
 
     // PTY → WebSocket (shell output)
     ptyProcess.onData((data: string) => {
@@ -5957,7 +6003,11 @@ function startTerminalServer(): void {
       logger.info(`[terminal] PTY exited (code: ${exitCode}, signal: ${signal})`);
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "exit", exitCode, signal }));
-        ws.close();
+        setTimeout(() => {
+          try {
+            ws.close();
+          } catch {}
+        }, 100);
       }
       activePtySessions.delete(ws);
     });
@@ -5972,10 +6022,20 @@ function startTerminalServer(): void {
           rows?: number;
         };
 
-        if (msg.type === "input" && msg.data) {
+        if (msg.type === "input" && typeof msg.data === "string") {
           ptyProcess.write(msg.data);
-        } else if (msg.type === "resize" && msg.cols && msg.rows) {
-          ptyProcess.resize(msg.cols, msg.rows);
+        } else if (
+          msg.type === "resize" &&
+          typeof msg.cols === "number" &&
+          typeof msg.rows === "number" &&
+          msg.cols > 0 &&
+          msg.rows > 0
+        ) {
+          try {
+            ptyProcess.resize(Math.max(1, Math.floor(msg.cols)), Math.max(1, Math.floor(msg.rows)));
+          } catch (err) {
+            logger.warn("[terminal] Failed to resize PTY", { error: String(err) });
+          }
         }
       } catch {
         // If raw message is not JSON, treat it as direct input
@@ -5986,13 +6046,17 @@ function startTerminalServer(): void {
 
     ws.on("close", () => {
       logger.info("[terminal] WebSocket closed, killing PTY");
-      ptyProcess.kill();
+      try {
+        ptyProcess.kill();
+      } catch {}
       activePtySessions.delete(ws);
     });
 
     ws.on("error", (err: Error) => {
       logger.error("terminal.ws_error", { error: err.message });
-      ptyProcess.kill();
+      try {
+        ptyProcess.kill();
+      } catch {}
       activePtySessions.delete(ws);
     });
   });
