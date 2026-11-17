@@ -350,7 +350,7 @@ function CustomProviderCard({ serverUrl, onError }: { serverUrl: string; onError
       <div className="auth-provider-header">
         <div className="auth-provider-info">
           <div className="auth-provider-icon-box custom">
-            <Server size={16} />
+            <Server size={18} />
           </div>
           <div className="auth-provider-title-wrap">
             <div className="auth-provider-name-row">
@@ -373,119 +373,136 @@ function CustomProviderCard({ serverUrl, onError }: { serverUrl: string; onError
       {/* Preset quick buttons */}
       <div className="custom-presets-row">
         <span className="custom-presets-label">Presets:</span>
-        {CUSTOM_PRESETS.map((p) => (
-          <button
-            key={p.name}
-            type="button"
-            className="custom-preset-chip"
-            onClick={() => {
-              setBaseUrl(p.url);
-              setModel(p.model);
-            }}
-          >
-            {p.name}
-          </button>
-        ))}
+        <div className="custom-presets-chips">
+          {CUSTOM_PRESETS.map((p) => (
+            <button
+              key={p.name}
+              type="button"
+              className="custom-preset-chip"
+              onClick={() => {
+                setBaseUrl(p.url);
+                setModel(p.model);
+              }}
+            >
+              {p.name}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <div className="auth-key-input-row" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-        <div className="auth-key-input-wrap">
-          <Globe size={13} className="auth-key-icon" />
-          <input
-            type="text"
-            value={baseUrl}
-            onChange={(e) => setBaseUrl(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void handleSave();
-            }}
-            placeholder="Base URL: https://api.deepseek.com/v1"
-            style={{ flex: 1 }}
-          />
-          {baseUrl ? (
-            <button
-              className="auth-input-action-btn"
-              type="button"
-              onClick={() => setBaseUrl("")}
-              title="Clear URL"
-            >
-              <X size={12} />
-            </button>
-          ) : null}
+      <div className="custom-inputs-stack">
+        <div className="custom-input-group">
+          <div className="custom-input-header">
+            <span className="custom-input-label">Base URL</span>
+            <span className="custom-input-hint">OpenAI-compatible /v1 endpoint</span>
+          </div>
+          <div className="auth-key-input-wrap">
+            <Globe size={14} className="auth-key-icon" />
+            <input
+              type="text"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void handleSave();
+              }}
+              placeholder="https://api.deepseek.com/v1"
+            />
+            {baseUrl ? (
+              <button
+                className="auth-input-action-btn"
+                type="button"
+                onClick={() => setBaseUrl("")}
+                title="Clear URL"
+              >
+                <X size={13} />
+              </button>
+            ) : null}
+          </div>
         </div>
 
-        <div className="auth-key-input-wrap">
-          <Key size={13} className="auth-key-icon" />
-          <input
-            type={showKey ? "text" : "password"}
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void handleSave();
-            }}
-            placeholder={hasApiKey ? "•••••••••••• (saved — enter new to replace)" : "API Key (optional for local Ollama/LM Studio)"}
-            style={{ flex: 1 }}
-          />
-          {apiKey ? (
+        <div className="custom-input-group">
+          <div className="custom-input-header">
+            <span className="custom-input-label">API Key</span>
+            <span className="custom-input-hint">Optional for local Ollama / LM Studio</span>
+          </div>
+          <div className="auth-key-input-wrap">
+            <Key size={14} className="auth-key-icon" />
+            <input
+              type={showKey ? "text" : "password"}
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void handleSave();
+              }}
+              placeholder={hasApiKey ? "•••••••••••• (saved — enter new key to replace)" : "Paste API key (sk-...)"}
+            />
+            {apiKey ? (
+              <button
+                className="auth-input-action-btn"
+                type="button"
+                onClick={() => setApiKey("")}
+                title="Clear Key"
+              >
+                <X size={13} />
+              </button>
+            ) : (
+              <button
+                className="auth-input-action-btn"
+                type="button"
+                onClick={() => void handlePasteCustomKey()}
+                title="Paste Key from Clipboard"
+              >
+                <ClipboardPaste size={13} />
+              </button>
+            )}
             <button
               className="auth-input-action-btn"
               type="button"
-              onClick={() => setApiKey("")}
-              title="Clear Key"
+              onClick={() => setShowKey(!showKey)}
+              title={showKey ? "Hide key" : "Show key"}
             >
-              <X size={12} />
+              {showKey ? <EyeOff size={13} /> : <Eye size={13} />}
             </button>
-          ) : (
-            <button
-              className="auth-input-action-btn"
-              type="button"
-              onClick={() => void handlePasteCustomKey()}
-              title="Paste Key from Clipboard"
-            >
-              <ClipboardPaste size={12} />
-            </button>
-          )}
+          </div>
+        </div>
+
+        <div className="custom-input-group">
+          <div className="custom-input-header">
+            <span className="custom-input-label">Default Model</span>
+            <span className="custom-input-hint">Target model ID</span>
+          </div>
+          <div className="auth-key-input-wrap">
+            <Bot size={14} className="auth-key-icon" />
+            <input
+              type="text"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void handleSave();
+              }}
+              placeholder="e.g. deepseek-chat, llama-3.3-70b-versatile"
+            />
+            {model ? (
+              <button
+                className="auth-input-action-btn"
+                type="button"
+                onClick={() => setModel("")}
+                title="Clear model"
+              >
+                <X size={13} />
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="custom-actions-row">
           <button
-            className="auth-input-action-btn"
-            type="button"
-            onClick={() => setShowKey(!showKey)}
-            title={showKey ? "Hide key" : "Show key"}
-          >
-            {showKey ? <EyeOff size={12} /> : <Eye size={12} />}
-          </button>
-        </div>
-
-        <div className="auth-key-input-wrap">
-          <Bot size={13} className="auth-key-icon" />
-          <input
-            type="text"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void handleSave();
-            }}
-            placeholder="Default Model (e.g. deepseek-chat, llama-3.3-70b-versatile)"
-            style={{ flex: 1 }}
-          />
-          {model ? (
-            <button
-              className="auth-input-action-btn"
-              type="button"
-              onClick={() => setModel("")}
-              title="Clear model"
-            >
-              <X size={12} />
-            </button>
-          ) : null}
-        </div>
-
-        <div className="auth-input-buttons" style={{ marginTop: "4px" }}>
-          <button
-            className="auth-save-btn"
+            className="auth-save-btn custom-save-btn"
             type="button"
             onClick={() => void handleSave()}
             disabled={saving || !baseUrl.trim()}
           >
-            {saving ? <LoaderCircle className="spin" size={12} /> : <Check size={12} />}
+            {saving ? <LoaderCircle className="spin" size={13} /> : <Check size={13} />}
             <span>{saving ? "Saving..." : isConnected ? "Update Custom Endpoint" : "Save & Connect Endpoint"}</span>
           </button>
         </div>
