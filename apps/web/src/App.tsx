@@ -57,6 +57,10 @@ import {
   Paperclip,
   FileText,
   Info,
+  CheckCircle2,
+  ClipboardPaste,
+  Globe,
+  Pencil,
 } from "lucide-react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import {
@@ -223,6 +227,59 @@ const EDITOR_OPTIONS = {
   wordWrap: "off",
 } as const;
 
+const PROVIDER_INFO: Record<
+  string,
+  {
+    name: string;
+    description: string;
+    keyPlaceholder: string;
+    getKeyUrl: string;
+    tag?: string;
+  }
+> = {
+  openai: {
+    name: "OpenAI",
+    description: "GPT-4o, GPT-4o-mini, o1, o3-mini",
+    keyPlaceholder: "sk-proj-...",
+    getKeyUrl: "https://platform.openai.com/api-keys",
+    tag: "Popular",
+  },
+  anthropic: {
+    name: "Anthropic Claude",
+    description: "Claude 3.7 Sonnet, Claude 3.5 Haiku",
+    keyPlaceholder: "sk-ant-api03-...",
+    getKeyUrl: "https://console.anthropic.com/settings/keys",
+    tag: "Recommended",
+  },
+  gemini: {
+    name: "Google Gemini",
+    description: "Gemini 2.0 Flash, Gemini 1.5 Pro (Free tier available)",
+    keyPlaceholder: "AIzaSy...",
+    getKeyUrl: "https://aistudio.google.com/app/apikey",
+    tag: "Free Tier",
+  },
+  openrouter: {
+    name: "OpenRouter",
+    description: "Single key for DeepSeek, Llama 3, Claude & 200+ models",
+    keyPlaceholder: "sk-or-v1-...",
+    getKeyUrl: "https://openrouter.ai/keys",
+    tag: "Multi-Model",
+  },
+  mistral: {
+    name: "Mistral AI",
+    description: "Codestral 2501, Mistral Large, Pixtral",
+    keyPlaceholder: "API key from console.mistral.ai",
+    getKeyUrl: "https://console.mistral.ai/api-keys/",
+  },
+};
+
+const CUSTOM_PRESETS = [
+  { name: "DeepSeek", url: "https://api.deepseek.com/v1", model: "deepseek-chat" },
+  { name: "Groq", url: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile" },
+  { name: "Ollama (Local)", url: "http://localhost:11434/v1", model: "llama3.2" },
+  { name: "LM Studio", url: "http://localhost:1234/v1", model: "local-model" },
+];
+
 function CustomProviderCard({ serverUrl, onError }: { serverUrl: string; onError: (msg: string) => void }) {
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -245,6 +302,7 @@ function CustomProviderCard({ serverUrl, onError }: { serverUrl: string; onError
   }, [serverUrl]);
 
   async function handleSave() {
+    if (!baseUrl.trim()) return;
     setSaving(true);
     try {
       const body: Record<string, string> = {};
@@ -268,69 +326,157 @@ function CustomProviderCard({ serverUrl, onError }: { serverUrl: string; onError
     }
   }
 
+  async function handlePasteCustomKey() {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) setApiKey(text.trim());
+    } catch {
+      // Clipboard permission denied
+    }
+  }
+
   if (!loaded) return null;
 
-  const isConnected = baseUrl.trim() && hasApiKey;
+  const isConnected = Boolean(baseUrl.trim() && hasApiKey);
 
   return (
-    <div className="auth-provider-card">
+    <div className={`auth-provider-card ${isConnected ? "is-connected" : ""}`}>
       <div className="auth-provider-header">
         <div className="auth-provider-info">
           <span className={`auth-status-dot ${isConnected ? "connected" : "disconnected"}`} />
-          <strong>Custom Endpoint</strong>
+          <div className="auth-provider-title-wrap">
+            <div className="auth-provider-name-row">
+              <strong>Custom OpenAI-Compatible Endpoint</strong>
+            </div>
+            <span className="auth-provider-desc">
+              Connect DeepSeek, Groq, local Ollama, LM Studio, or any OpenAI-compatible API
+            </span>
+          </div>
         </div>
-        <span className="auth-method-badge">
-          {isConnected ? "Connected" : "—"}
+        <span className={`auth-method-badge ${isConnected ? "badge-connected" : ""}`}>
+          {isConnected ? "Active" : "Not Set"}
         </span>
       </div>
 
-      <div className="auth-key-input-row" style={{ flexDirection: "column", gap: "8px" }}>
+      {/* Preset quick buttons */}
+      <div className="custom-presets-row">
+        <span className="custom-presets-label">Quick Presets:</span>
+        {CUSTOM_PRESETS.map((p) => (
+          <button
+            key={p.name}
+            type="button"
+            className="custom-preset-chip"
+            onClick={() => {
+              setBaseUrl(p.url);
+              setModel(p.model);
+            }}
+          >
+            {p.name}
+          </button>
+        ))}
+      </div>
+
+      <div className="auth-key-input-row" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
         <div className="auth-key-input-wrap">
-          <ExternalLink size={12} className="auth-key-icon" />
+          <Globe size={13} className="auth-key-icon" />
           <input
             type="text"
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder="API endpoint URL (e.g. https://api.example.com/v1)"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void handleSave();
+            }}
+            placeholder="Base URL: https://api.deepseek.com/v1"
             style={{ flex: 1 }}
           />
+          {baseUrl ? (
+            <button
+              className="auth-input-action-btn"
+              type="button"
+              onClick={() => setBaseUrl("")}
+              title="Clear URL"
+            >
+              <X size={12} />
+            </button>
+          ) : null}
         </div>
+
         <div className="auth-key-input-wrap">
-          <Key size={12} className="auth-key-icon" />
+          <Key size={13} className="auth-key-icon" />
           <input
             type={showKey ? "text" : "password"}
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder={hasApiKey ? "•••••••• (key saved)" : "API key"}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void handleSave();
+            }}
+            placeholder={hasApiKey ? "•••••••••••• (key currently saved — enter new to replace)" : "API Key (optional for local Ollama/LM Studio)"}
             style={{ flex: 1 }}
           />
+          {apiKey ? (
+            <button
+              className="auth-input-action-btn"
+              type="button"
+              onClick={() => setApiKey("")}
+              title="Clear Key"
+            >
+              <X size={12} />
+            </button>
+          ) : (
+            <button
+              className="auth-input-action-btn"
+              type="button"
+              onClick={() => void handlePasteCustomKey()}
+              title="Paste Key from Clipboard"
+            >
+              <ClipboardPaste size={12} />
+            </button>
+          )}
           <button
-            className="auth-visibility-btn"
+            className="auth-input-action-btn"
             type="button"
             onClick={() => setShowKey(!showKey)}
+            title={showKey ? "Hide key" : "Show key"}
           >
             {showKey ? <EyeOff size={12} /> : <Eye size={12} />}
           </button>
         </div>
+
         <div className="auth-key-input-wrap">
-          <Bot size={12} className="auth-key-icon" />
+          <Bot size={13} className="auth-key-icon" />
           <input
             type="text"
             value={model}
             onChange={(e) => setModel(e.target.value)}
-            placeholder="Model name (e.g. gpt-4o, claude-sonnet-4-20250514)"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void handleSave();
+            }}
+            placeholder="Default Model (e.g. deepseek-chat, llama-3.3-70b-versatile)"
             style={{ flex: 1 }}
           />
+          {model ? (
+            <button
+              className="auth-input-action-btn"
+              type="button"
+              onClick={() => setModel("")}
+              title="Clear model"
+            >
+              <X size={12} />
+            </button>
+          ) : null}
         </div>
-        <button
-          className="auth-save-btn"
-          type="button"
-          onClick={() => void handleSave()}
-          disabled={saving || !baseUrl.trim()}
-        >
-          {saving ? <LoaderCircle className="spin" size={12} /> : <Check size={12} />}
-          <span>{saving ? "..." : "Save"}</span>
-        </button>
+
+        <div className="auth-input-buttons" style={{ marginTop: "4px" }}>
+          <button
+            className="auth-save-btn"
+            type="button"
+            onClick={() => void handleSave()}
+            disabled={saving || !baseUrl.trim()}
+          >
+            {saving ? <LoaderCircle className="spin" size={12} /> : <Check size={12} />}
+            <span>{saving ? "Saving & Connecting..." : isConnected ? "Update Custom Endpoint" : "Save & Connect Endpoint"}</span>
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -421,9 +567,9 @@ export default function App() {
   // Auth state
   const [authStatus, setAuthStatus] = useState<AuthStatusResponse | null>(null);
   const [apiKeyInputs, setApiKeyInputs] = useState<Record<string, string>>({});
-  const [apiKeyVisible, setApiKeyVisible] = useState<Record<string, boolean>>(
-    {},
-  );
+  const [apiKeyVisible, setApiKeyVisible] = useState<Record<string, boolean>>({});
+  const [editingKey, setEditingKey] = useState<Record<string, boolean>>({});
+  const [keySavedToast, setKeySavedToast] = useState<string | null>(null);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [removingKey, setRemovingKey] = useState<string | null>(null);
   const [githubDevice, setGithubDevice] =
@@ -1542,15 +1688,30 @@ export default function App() {
     }
   }
 
+  async function handlePasteApiKey(providerId: string) {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        setApiKeyInputs((prev) => ({ ...prev, [providerId]: text.trim() }));
+      }
+    } catch {
+      // Clipboard access may be restricted
+    }
+  }
+
   async function saveApiKey(providerId: ProviderId, key: string) {
+    if (!key.trim()) return;
     setSavingKey(providerId);
     try {
       await fetchJson(`${serverUrl}/api/auth/keys`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ provider: providerId, key }),
+        body: JSON.stringify({ provider: providerId, key: key.trim() }),
       });
       setApiKeyInputs((current) => ({ ...current, [providerId]: "" }));
+      setEditingKey((current) => ({ ...current, [providerId]: false }));
+      setKeySavedToast(providerId);
+      setTimeout(() => setKeySavedToast(null), 3500);
       await loadAuthStatus();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save key");
@@ -4489,62 +4650,122 @@ export default function App() {
                   )}
                 </div>
 
-                {/* API Key providers: OpenAI, Anthropic, OpenRouter */}
-                {(["openai", "anthropic", "openrouter", "gemini", "mistral"] as const).map(
+                {/* API Key providers: OpenAI, Anthropic, Gemini, OpenRouter, Mistral */}
+                {(["openai", "anthropic", "gemini", "openrouter", "mistral"] as const).map(
                   (providerId) => {
+                    const info = PROVIDER_INFO[providerId] || {
+                      name: providerId,
+                      description: "AI model provider",
+                      keyPlaceholder: `Paste ${providerId} API key`,
+                      getKeyUrl: "https://platform.openai.com",
+                    };
                     const providerInfo = authStatus?.providers.find(
                       (p) => p.id === providerId,
                     );
                     const isConnected = providerInfo?.status === "connected";
                     const method = providerInfo?.method ?? "none";
-                    const labelText = providerInfo?.label ?? providerId;
+                    const isEditing = editingKey[providerId] ?? false;
                     const keyInput = apiKeyInputs[providerId] ?? "";
                     const isVisible = apiKeyVisible[providerId] ?? false;
 
                     return (
-                      <div key={providerId} className="auth-provider-card">
+                      <div
+                        key={providerId}
+                        className={`auth-provider-card ${isConnected ? "is-connected" : ""}`}
+                      >
                         <div className="auth-provider-header">
                           <div className="auth-provider-info">
                             <span
                               className={`auth-status-dot ${isConnected ? "connected" : "disconnected"}`}
                             />
-                            <strong>{labelText}</strong>
+                            <div className="auth-provider-title-wrap">
+                              <div className="auth-provider-name-row">
+                                <strong>{info.name}</strong>
+                                {info.tag ? (
+                                  <span className="auth-provider-tag">{info.tag}</span>
+                                ) : null}
+                              </div>
+                              <span className="auth-provider-desc">
+                                {info.description}
+                              </span>
+                            </div>
                           </div>
-                          <span className="auth-method-badge">
-                            {method === "env"
-                              ? "ENV"
-                              : method === "stored_key"
-                                ? "Key"
-                                : "—"}
-                          </span>
+                          <div className="auth-provider-actions-top">
+                            <span
+                              className={`auth-method-badge ${isConnected ? "badge-connected" : ""}`}
+                            >
+                              {method === "env"
+                                ? "ENV (.env)"
+                                : method === "stored_key"
+                                  ? "Saved Key"
+                                  : "Not Set"}
+                            </span>
+                            <a
+                              href={info.getKeyUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="auth-get-key-link"
+                              title={`Get ${info.name} API Key`}
+                            >
+                              <span>Get Key</span>
+                              <ExternalLink size={10} />
+                            </a>
+                          </div>
                         </div>
 
-                        {isConnected ? (
+                        {isConnected && !isEditing ? (
                           <div className="auth-connected-row">
-                            <span className="auth-connected-label">
-                              <Check size={12} />
-                              Connected
-                            </span>
-                            {method === "stored_key" ? (
+                            <div className="auth-key-preview">
+                              <Key size={12} className="auth-key-preview-icon" />
+                              <span className="auth-masked-key">
+                                ••••••••••••••••••••••••
+                              </span>
+                              <span className="auth-connected-pill">
+                                <CheckCircle2 size={11} />
+                                <span>Active</span>
+                              </span>
+                            </div>
+                            <div className="auth-btn-row">
                               <button
-                                className="auth-remove-btn"
+                                className="auth-action-btn auth-edit-btn"
                                 type="button"
-                                onClick={() => void removeApiKey(providerId)}
-                                disabled={removingKey === providerId}
+                                onClick={() => {
+                                  setEditingKey((prev) => ({
+                                    ...prev,
+                                    [providerId]: true,
+                                  }));
+                                  setApiKeyInputs((prev) => ({
+                                    ...prev,
+                                    [providerId]: "",
+                                  }));
+                                }}
+                                title="Change or update API key"
                               >
-                                <X size={12} />
-                                <span>
-                                  {removingKey === providerId
-                                    ? "..."
-                                    : "Remove"}
-                                </span>
+                                <Pencil size={11} />
+                                <span>Update</span>
                               </button>
-                            ) : null}
+                              {method === "stored_key" ? (
+                                <button
+                                  className="auth-action-btn auth-remove-btn"
+                                  type="button"
+                                  onClick={() => void removeApiKey(providerId)}
+                                  disabled={removingKey === providerId}
+                                  title="Remove stored API key"
+                                >
+                                  <Trash2 size={11} />
+                                  <span>
+                                    {removingKey === providerId
+                                      ? "..."
+                                      : "Remove"}
+                                  </span>
+                                </button>
+                              ) : null}
+                            </div>
                           </div>
                         ) : (
-                          <div className="auth-key-input-row">
+                          <div className="auth-key-input-container">
                             <div className="auth-key-input-wrap">
-                              <Key size={12} className="auth-key-icon" />
+                              <Key size={13} className="auth-key-icon" />
                               <input
                                 type={isVisible ? "text" : "password"}
                                 value={keyInput}
@@ -4554,16 +4775,55 @@ export default function App() {
                                     [providerId]: e.target.value,
                                   }))
                                 }
-                                placeholder={`Paste ${labelText} API key`}
+                                onKeyDown={(e) => {
+                                  if (
+                                    e.key === "Enter" &&
+                                    keyInput.trim() &&
+                                    savingKey !== providerId
+                                  ) {
+                                    void saveApiKey(providerId, keyInput);
+                                  }
+                                }}
+                                placeholder={info.keyPlaceholder}
+                                autoFocus={isEditing}
                               />
+                              {keyInput ? (
+                                <button
+                                  className="auth-input-action-btn"
+                                  type="button"
+                                  onClick={() =>
+                                    setApiKeyInputs((current) => ({
+                                      ...current,
+                                      [providerId]: "",
+                                    }))
+                                  }
+                                  title="Clear input"
+                                >
+                                  <X size={12} />
+                                </button>
+                              ) : (
+                                <button
+                                  className="auth-input-action-btn"
+                                  type="button"
+                                  onClick={() =>
+                                    void handlePasteApiKey(providerId)
+                                  }
+                                  title="Paste from clipboard"
+                                >
+                                  <ClipboardPaste size={12} />
+                                </button>
+                              )}
                               <button
-                                className="auth-visibility-btn"
+                                className="auth-input-action-btn"
                                 type="button"
                                 onClick={() =>
                                   setApiKeyVisible((current) => ({
                                     ...current,
                                     [providerId]: !isVisible,
                                   }))
+                                }
+                                title={
+                                  isVisible ? "Hide API key" : "Show API key"
                                 }
                               >
                                 {isVisible ? (
@@ -4573,27 +4833,59 @@ export default function App() {
                                 )}
                               </button>
                             </div>
-                            <button
-                              className="auth-save-btn"
-                              type="button"
-                              onClick={() =>
-                                void saveApiKey(providerId, keyInput)
-                              }
-                              disabled={
-                                !keyInput.trim() || savingKey === providerId
-                              }
-                            >
-                              {savingKey === providerId ? (
-                                <LoaderCircle className="spin" size={12} />
-                              ) : (
-                                <Check size={12} />
-                              )}
-                              <span>
-                                {savingKey === providerId ? "..." : "Save"}
-                              </span>
-                            </button>
+
+                            <div className="auth-input-buttons">
+                              {isEditing ? (
+                                <button
+                                  className="auth-cancel-btn"
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingKey((prev) => ({
+                                      ...prev,
+                                      [providerId]: false,
+                                    }));
+                                    setApiKeyInputs((prev) => ({
+                                      ...prev,
+                                      [providerId]: "",
+                                    }));
+                                  }}
+                                >
+                                  Cancel
+                                </button>
+                              ) : null}
+                              <button
+                                className="auth-save-btn"
+                                type="button"
+                                onClick={() =>
+                                  void saveApiKey(providerId, keyInput)
+                                }
+                                disabled={
+                                  !keyInput.trim() || savingKey === providerId
+                                }
+                              >
+                                {savingKey === providerId ? (
+                                  <LoaderCircle className="spin" size={12} />
+                                ) : (
+                                  <Check size={12} />
+                                )}
+                                <span>
+                                  {savingKey === providerId
+                                    ? "Saving..."
+                                    : isEditing
+                                      ? "Update Key"
+                                      : "Save Key"}
+                                </span>
+                              </button>
+                            </div>
                           </div>
                         )}
+
+                        {keySavedToast === providerId ? (
+                          <div className="auth-toast-success">
+                            <CheckCircle2 size={12} />
+                            <span>Key saved and verified active!</span>
+                          </div>
+                        ) : null}
                       </div>
                     );
                   },
