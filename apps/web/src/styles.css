@@ -119,7 +119,7 @@ input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
 [tabindex]:focus-visible {
-  outline: 2px solid var(--primary, #fab283);
+  outline: 2px solid var(--interactive, #3b82f6);
   outline-offset: 2px;
 }
 
@@ -3600,7 +3600,9 @@ button.titlebar-chip {
   color: #71717a;
 }
 
-.auth-key-input-wrap input {
+.auth-key-input-wrap input,
+.auth-key-input-wrap input:focus,
+.auth-key-input-wrap input:focus-visible {
   flex: 1;
   height: 100%;
   padding: 0 10px;
@@ -3608,8 +3610,9 @@ button.titlebar-chip {
   color: #f4f4f5;
   font-size: 12px;
   font-family: var(--font-mono);
-  border: none;
-  outline: none;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
   min-width: 0;
 }
 
@@ -3629,7 +3632,14 @@ button.titlebar-chip {
   color: #71717a;
   cursor: pointer;
   border: none;
+  outline: none;
   transition: color 0.12s, background 0.12s;
+}
+
+.auth-input-action-btn:focus,
+.auth-input-action-btn:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
 }
 
 .auth-input-action-btn:hover {
@@ -4088,9 +4098,11 @@ button.titlebar-chip {
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
-.models-search-input:focus {
+.models-search-input:focus,
+.models-search-input:focus-visible {
   border-color: #3b82f6;
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+  outline: none !important;
 }
 
 .models-search-clear {
@@ -5451,7 +5463,7 @@ select:focus-visible,
 textarea:focus-visible,
 [tabindex]:focus-visible,
 a:focus-visible {
-  outline: 2px solid var(--primary, #fab283) !important;
+  outline: 2px solid var(--interactive, #3b82f6);
   outline-offset: 2px;
 }
 
